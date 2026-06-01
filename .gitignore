@@ -1,0 +1,37 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Pipeline artifacts (never commit these)
+trivy-results.json
+trivy-results-post-patch.json
+patch_audit.log
+kind-test-report.txt
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# KinD kubeconfig
+kubeconfig.yaml

@@ -1,0 +1,25 @@
+# Trivy Policy Configuration
+# Reference: https://aquasecurity.github.io/trivy/latest/docs/configuration/
+
+# Only fail the pipeline for these severity levels
+severity:
+  - CRITICAL
+  - HIGH
+
+# Ignore unfixed vulnerabilities — they cannot be patched yet
+ignore-unfixed: true
+
+# Scan targets
+scanners:
+  - vuln
+  - secret
+  - misconfig
+
+# Exit code 1 only when a vulnerability is found at the defined severity
+exit-code: 1
+
+# Output format for the AI patching engine
+format: json
+
+# Cache settings
+cache-dir: /tmp/trivy-cache

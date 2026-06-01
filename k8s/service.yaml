@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: guardian-demo
+  namespace: default
+  labels:
+    app: guardian-demo
+    managed-by: supply-chain-guardian
+  annotations:
+    # Allows Prometheus to discover and scrape this service automatically
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  selector:
+    app: guardian-demo
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

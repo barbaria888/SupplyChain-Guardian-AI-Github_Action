@@ -1,0 +1,13 @@
+# .trivyignore — CVE Exceptions
+#
+# Format: CVE-YYYY-NNNNN [optional expiry date]
+#
+# Add CVEs here ONLY when they are:
+#   1. Confirmed not exploitable in this application's context, AND
+#   2. Have a tracking issue linked in the comment, AND
+#   3. Approved by @SecOps
+#
+# Example:
+# CVE-2023-12345 exp:2025-01-01  # Tracked: github.com/example/repo/issues/42
+
+# --- No exceptions currently defined ---

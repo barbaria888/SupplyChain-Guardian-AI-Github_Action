@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: guardian-demo
+  namespace: default
+  labels:
+    app: guardian-demo
+    version: "1.0.0"
+    managed-by: supply-chain-guardian
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    guardian.dev/last-scanned: "pending"
+    guardian.dev/cve-status: "pending"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: guardian-demo
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0          # Zero-downtime deployments
+  template:
+    metadata:
+      labels:
+        app: guardian-demo
+        version: "1.0.0"
+    spec:
+      # -----------------------------------------------------------------------
+      # Security Context — Pod Level
+      # Enforces that no container in this pod runs as root.
+      # -----------------------------------------------------------------------
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      # -----------------------------------------------------------------------
+      # Topology spread for HA across nodes
+      # -----------------------------------------------------------------------
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: guardian-demo
+
+      automountServiceAccountToken: false
+
+      containers:
+        - name: guardian-demo
+          image: guardian-demo:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          # -------------------------------------------------------------------
+          # Security Context — Container Level
+          # -------------------------------------------------------------------
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+
+          # -------------------------------------------------------------------
+          # Resource Limits — prevents noisy-neighbour issues
+          # Tune for your node capacity.
+          # -------------------------------------------------------------------
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+
+          # -------------------------------------------------------------------
+          # Environment
+          # -------------------------------------------------------------------
+          env:
+            - name: APP_ENV
+              value: "production"
+            - name: APP_VERSION
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['version']
+
+          # -------------------------------------------------------------------
+          # Probes — must match /healthz and /readyz routes in src/main.py
+          # -------------------------------------------------------------------
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+            successThreshold: 1
+
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 3
+            failureThreshold: 10    # 30s total startup grace period
+
+          # -------------------------------------------------------------------
+          # Volume Mounts
+          # readOnlyRootFilesystem requires a writable tmp for uvicorn
+          # -------------------------------------------------------------------
+          volumeMounts:
+            - name: tmp-dir
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp-dir
+          emptyDir: {}
