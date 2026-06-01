@@ -154,6 +154,7 @@ runs:
       with:
         python-version: '3.12'
         cache: 'pip'
+        cache-dependency-path: ${{ github.action_path }}/scripts/requirements.txt
 
     - name: Install patching engine dependencies
       shell: bash

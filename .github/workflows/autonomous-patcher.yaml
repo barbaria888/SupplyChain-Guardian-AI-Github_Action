@@ -149,6 +149,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: "pip"
+          cache-dependency-path: "scripts/requirements.txt"
 
       - name: Install patching engine dependencies
         run: pip install -r scripts/requirements.txt
