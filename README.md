@@ -1,110 +1,158 @@
-# Proactive DevSecOps Supply Chain Guardian
+# Supply Chain Guardian AI
 
+[![Autonomous Supply Chain Patcher](https://github.com/barbaria888/SupplyChain-Guardian-AI/actions/workflows/autonomous-patcher.yaml/badge.svg)](https://github.com/barbaria888/SupplyChain-Guardian-AI/actions/workflows/autonomous-patcher.yaml)
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Supply%20Chain%20Guardian%20AI-blueviolet?logo=github)](https://github.com/marketplace/actions/supply-chain-guardian-ai)
 [![Supply Chain Guardian](https://img.shields.io/badge/pipeline-supply--chain--guardian-blueviolet)](https://github.com)
 [![Security](https://img.shields.io/badge/security-trivy--scanned-brightgreen)](https://github.com/aquasecurity/trivy)
-[![AI Patching](https://img.shields.io/badge/AI-Llama%203.2%201B%20%40%20Ollama-orange)](https://ollama.com)
+[![AI Patching](https://img.shields.io/badge/AI-Multi--Provider-orange)](https://ollama.com)
 
-> **Autonomous, closed-loop CVE detection and remediation for containerized workloads — no cloud LLM keys required.**
+> **Autonomous, closed-loop CVE detection and remediation for containerized workloads — local CPU inference, cloud LLMs, or bring your own.**
+
+<img width="1024" height="1024" alt="overview" src="https://github.com/user-attachments/assets/4a78c1c1-203d-48c9-b176-ccbf505009d8" />
 
 ---
 
 ## What This Does
 
-This pipeline detects vulnerabilities in your container images, uses a **local Llama 3.2 1B model** running on the GitHub runner's CPU to generate a patch, validates the fix inside an ephemeral **KinD cluster**, and opens a **pull request with proof** — all automatically.
+This GitHub Action detects vulnerabilities in your container images, uses an **AI model** to generate a Dockerfile patch, validates the fix inside an ephemeral **KinD cluster**, and opens a **pull request with proof** — all automatically.
 
 ```
-Push → Trivy Scan → CVE Found → Ollama Patches Dockerfile
-         → KinD Validates → Re-scan Confirms Fix → PR Opened
+Push → Trivy Scan → CVE Found → AI Patches Dockerfile
+         → Smoke Test → KinD Validates → Re-scan Confirms → PR Opened
+```
+
+**Zero data egress** with local Ollama (default), or use Gemini / OpenAI for faster inference.
+
+---
+
+## ⚡ Quickstart
+
+Add this to `.github/workflows/supply-chain-guardian.yaml`:
+
+```yaml
+name: Supply Chain Guardian
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * *'  # Nightly CVE check
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  guardian:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Supply Chain Guardian
+        uses: barbaria888/SupplyChain-Guardian-AI@v1
+        with:
+          dockerfile: './Dockerfile'
+```
+
+That's it. The action handles everything — scanning, patching, validation, and PR creation.
+
+---
+
+## 🤖 Multi-Provider LLM Support
+
+Choose the inference engine that fits your needs:
+
+### Option 1: Local Ollama (Default — Zero Cost, Full Privacy)
+
+```yaml
+- uses: barbaria888/SupplyChain-Guardian-AI@v1
+  with:
+    provider: 'ollama'
+    model: 'llama3.2:1b'    # ~700MB, runs on GitHub runner CPU
+```
+
+### Option 2: Google Gemini (Fast, Low Cost)
+
+```yaml
+- uses: barbaria888/SupplyChain-Guardian-AI@v1
+  with:
+    provider: 'gemini'
+    model: 'gemini-2.0-flash'
+    api-key: ${{ secrets.GEMINI_API_KEY }}
+```
+
+### Option 3: OpenAI / Azure OpenAI
+
+```yaml
+- uses: barbaria888/SupplyChain-Guardian-AI@v1
+  with:
+    provider: 'openai'
+    model: 'gpt-4o-mini'
+    api-key: ${{ secrets.OPENAI_API_KEY }}
 ```
 
 ---
 
 ## Architecture
 
+<img width="1536" height="1024" alt="Architecture" src="https://github.com/user-attachments/assets/5298fd37-a5f7-47ae-b68b-e66837630612" />
+
 | Layer | Tool | Role |
 |---|---|---|
-| **Scanning** | Trivy v0.55+ | CVE detection, SBOM generation |
-| **AI Reasoning** | Ollama + Llama 3.2 1B | Dockerfile patching, CPU-only |
-| **Validation** | KinD v0.23+ | Ephemeral K8s integration test |
+| **Scanning** | Trivy | CVE detection, SBOM generation |
+| **AI Reasoning** | Ollama / Gemini / OpenAI | Dockerfile patching |
+| **Validation** | KinD | Ephemeral K8s integration test |
 | **Orchestration** | GitHub Actions | Full pipeline coordinator |
 | **PR Creation** | peter-evans/create-pull-request | Automated, human-reviewable PR |
 
 ---
 
-## Repository Structure
+## 📋 Inputs
 
-```
-.
-├── agents.md                        # Agent persona definitions
-├── .agents/
-│   └── skills/
-│       └── devsecops_workflow.md    # Domain interaction contract
-├── .kind/
-│   └── cluster-config.yaml          # KinD 2-node cluster spec
-├── .trivy/                           # Trivy policy & ignore files (Phase 3)
-├── .github/
-│   └── workflows/
-│       └── autonomous-patcher.yaml  # The full pipeline (Phase 4)
-├── k8s/
-│   ├── deployment.yaml              # Production-grade Deployment
-│   └── service.yaml                 # ClusterIP Service
-├── scripts/
-│   └── remediate_cve.py             # AI patching engine (Phase 3)
-├── src/
-│   ├── main.py                      # FastAPI demo application
-│   └── requirements.txt
-├── tests/
-│   ├── unit/                         # Unit tests (Phase 3)
-│   └── integration/                  # Integration tests (Phase 4)
-├── Dockerfile                        # ⚠️ Intentionally vulnerable baseline
-├── SECURITY.md
-└── README.md
-```
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `dockerfile` | No | `Dockerfile` | Path to the Dockerfile to scan and patch |
+| `image-ref` | No | `''` | Pre-built image to scan (skips build step) |
+| `severity` | No | `CRITICAL,HIGH` | Trivy severity filter |
+| `provider` | No | `ollama` | LLM provider: `ollama`, `gemini`, `openai` |
+| `model` | No | *(auto)* | Model name for the selected provider |
+| `api-key` | No | `''` | API key for cloud providers |
+| `trivy-version` | No | `0.55.0` | Trivy version |
+| `kind-enabled` | No | `true` | Enable KinD cluster validation |
+| `kind-config` | No | `.kind/cluster-config.yaml` | KinD cluster config path |
+| `k8s-manifests` | No | `k8s/` | K8s manifests directory |
+| `create-pr` | No | `true` | Auto-create Pull Request |
+| `pr-branch` | No | `auto-patcher/cve-remediation` | Branch name for the PR |
+| `pr-labels` | No | `security,automated-patch,...` | PR labels |
+| `fail-on-vulnerability` | No | `true` | Fail if CVEs can't be patched |
+| `ollama-timeout` | No | `120` | LLM inference timeout (seconds) |
 
----
+## 📤 Outputs
 
-## Agent Personas
-
-See [`agents.md`](./agents.md) for the full definition of:
-
-- **@SecOps** — Trivy scanning and CVE triage
-- **@AIPatcher** — Ollama LLM integration and patch generation
-- **@SRE** — KinD cluster and Kubernetes manifest validation
+| Output | Description |
+|---|---|
+| `vulnerabilities-found` | Whether CRITICAL/HIGH CVEs were detected |
+| `patch-applied` | Whether the AI generated a valid patch |
+| `smoke-test-passed` | Whether the patched Dockerfile compiled |
+| `kind-validation-passed` | Whether KinD deployment succeeded |
+| `pr-url` | URL of the created Pull Request |
+| `trivy-results-path` | Path to scan results JSON |
+| `audit-log-path` | Path to the LLM audit log |
 
 ---
 
-## Getting Started (Local Development)
+## 🛡️ Security Design
 
-### Prerequisites
-- Docker Desktop
-- `kind` CLI
-- `kubectl` CLI
-- `trivy` CLI
-- `ollama` CLI
+### Hallucination Defense (3-Layer)
 
-### Run the app locally
-```bash
-docker build -t guardian-demo:latest .
-docker run -p 8080:8080 guardian-demo:latest
-curl http://localhost:8080/healthz
-```
+1. **Instruction Whitelist** — Every Dockerfile line must start with a valid instruction (`FROM`, `RUN`, `COPY`, etc.). Invented keywords like `CREATEGROUP` or `ADDuser` are rejected instantly.
+2. **Docker Build Smoke Test** — The patched Dockerfile must compile with `docker build` before any artifact is uploaded.
+3. **KinD Cluster Validation** — The patched image must boot, pass health probes, and show zero `CrashLoopBackOff` pods.
 
-### Run a local scan
-```bash
-trivy image --format json --output trivy-results.json guardian-demo:latest
-```
+### Side-by-Side Patching
 
-### Spin up the test cluster
-```bash
-kind create cluster --config .kind/cluster-config.yaml
-kind load docker-image guardian-demo:latest --name guardian-test
-kubectl apply -f k8s/
-kubectl wait --for=condition=available --timeout=120s deployment/guardian-demo
-```
+The AI writes to `Dockerfile.patched` — the original file is **never touched** until the smoke test passes. If the patch is rejected, the broken file is uploaded to a `rejected-patch-forensic` artifact for audit.
 
----
-
-## Security Contexts
+### Security Contexts
 
 All Kubernetes manifests enforce:
 - `runAsNonRoot: true`
@@ -115,18 +163,65 @@ All Kubernetes manifests enforce:
 
 ---
 
-## Compliance Artifacts
+## 📊 Compliance Artifacts
 
-Every pipeline run uploads:
-- `trivy-results.json` — original scan
-- `patch_audit.log` — full LLM prompt + response
-- `kind-test-report.txt` — cluster validation evidence
-- `trivy-results-post-patch.json` — remediation proof
+Every pipeline run uploads (90-day retention):
 
-Retained for **90 days** for SOC 2 / internal audit purposes.
+| Artifact | Purpose |
+|---|---|
+| `trivy-results.json` | Original vulnerability report |
+| `patch_audit.log` | Full LLM prompt + response for audit review |
+| `kind-test-report.txt` | KinD cluster validation evidence |
+| `trivy-results-post-patch.json` | Proof of CVE remediation |
+
+---
+
+## 🏗️ Repository Structure
+
+```
+.
+├── action.yml                        # GitHub Marketplace Action definition
+├── agents.md                         # Agent persona definitions
+├── .agents/skills/                   # Domain interaction contracts
+├── .kind/cluster-config.yaml         # KinD 2-node cluster spec
+├── .trivy/                           # Trivy policy & ignore files
+├── .github/workflows/                # Internal pipeline (dogfooding)
+├── k8s/                              # Production-grade K8s manifests
+├── scripts/remediate_cve.py          # AI patching engine (multi-provider)
+├── src/                              # Demo FastAPI application
+├── tests/unit/                       # 43 unit tests
+├── tests/integration/                # KinD integration test script
+├── Dockerfile                        # Intentionally vulnerable baseline
+├── SECURITY.md                       # Responsible disclosure policy
+└── README.md
+```
+
+---
+
+## 🧑‍💻 Local Development
+
+```bash
+# Build and scan locally
+docker build -t guardian-demo:latest .
+trivy image --format json --output trivy-results.json guardian-demo:latest
+
+# Run the AI patcher locally (requires Ollama)
+ollama serve &
+ollama pull llama3.2:1b
+python scripts/remediate_cve.py
+
+# Validate in a local KinD cluster
+kind create cluster --config .kind/cluster-config.yaml
+kind load docker-image guardian-demo:latest --name guardian-test
+kubectl apply -f k8s/
+kubectl wait --for=condition=available --timeout=120s deployment/guardian-demo
+```
 
 ---
 
 ## License
 
 MIT — See [LICENSE](./LICENSE)
+
+
+> **Autonomous, closed-loop CVE detection and remediation for containerized workloads — no cloud LLM keys required.**

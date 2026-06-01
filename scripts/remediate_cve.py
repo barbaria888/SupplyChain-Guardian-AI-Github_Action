@@ -25,7 +25,7 @@ import os
 import re
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,9 +34,21 @@ import requests
 # ---------------------------------------------------------------------------
 # Constants & Configuration
 # ---------------------------------------------------------------------------
+# Provider selection: "ollama" (default, local CPU), "gemini", or "openai"
+PROVIDER: str = os.getenv("PROVIDER", "ollama").lower()
+API_KEY: str = os.getenv("API_KEY", "")  # Required for gemini/openai providers
+
 OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
 OLLAMA_TIMEOUT: int = int(os.getenv("OLLAMA_TIMEOUT", "120"))  # seconds
+
+# Gemini provider settings
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_ENDPOINT: str = "https://generativelanguage.googleapis.com/v1beta/models"
+
+# OpenAI-compatible provider settings (works with OpenAI, Azure OpenAI, etc.)
+OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_ENDPOINT: str = os.getenv("OPENAI_ENDPOINT", "https://api.openai.com/v1/chat/completions")
 
 TRIVY_RESULTS_PATH: Path = Path(os.getenv("TRIVY_RESULTS", "trivy-results.json"))
 DOCKERFILE_PATH: Path = Path(os.getenv("DOCKERFILE_PATH", "Dockerfile"))
@@ -89,7 +101,7 @@ class AuditLogger:
 
     def write(self, event: str, data: dict[str, Any]) -> None:
         entry = {
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "event": event,
             **data,
         }
@@ -231,8 +243,17 @@ def build_prompt(cve_records: list[dict[str, str]], dockerfile_content: str) -> 
 
 
 # ---------------------------------------------------------------------------
-# Step 4 — LLM Invocation (with retry)
+# Step 4 — LLM Invocation (multi-provider, with retry)
 # ---------------------------------------------------------------------------
+def _get_active_model_name() -> str:
+    """Return the human-readable model name for the active provider."""
+    if PROVIDER == "gemini":
+        return GEMINI_MODEL
+    elif PROVIDER == "openai":
+        return OPENAI_MODEL
+    return OLLAMA_MODEL
+
+
 def _call_ollama(prompt: str, attempt: int) -> str:
     """
     POST a generate request to the local Ollama server.
@@ -260,32 +281,111 @@ def _call_ollama(prompt: str, attempt: int) -> str:
     return response.json().get("response", "")
 
 
+def _call_gemini(prompt: str, attempt: int) -> str:
+    """
+    POST to Google Gemini REST API (generativelanguage.googleapis.com).
+    Requires API_KEY to be set.
+    """
+    if not API_KEY:
+        log.critical("PROVIDER=gemini but API_KEY is not set. Exiting 1.")
+        sys.exit(1)
+
+    url = f"{GEMINI_ENDPOINT}/{GEMINI_MODEL}:generateContent?key={API_KEY}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.0,
+            "topP": 1.0,
+            "maxOutputTokens": 2048,
+        },
+    }
+    log.info("Calling Gemini (attempt %d/%d) model=%s", attempt, MAX_RETRIES, GEMINI_MODEL)
+    response = requests.post(url, json=payload, timeout=OLLAMA_TIMEOUT)
+    response.raise_for_status()
+    data = response.json()
+    # Gemini response structure: candidates[0].content.parts[0].text
+    try:
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError) as exc:
+        log.error("Unexpected Gemini response structure: %s", exc)
+        raise
+
+
+def _call_openai(prompt: str, attempt: int) -> str:
+    """
+    POST to OpenAI-compatible chat completions API.
+    Works with OpenAI, Azure OpenAI, and any compatible endpoint.
+    Requires API_KEY to be set.
+    """
+    if not API_KEY:
+        log.critical("PROVIDER=openai but API_KEY is not set. Exiting 1.")
+        sys.exit(1)
+
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": OPENAI_MODEL,
+        "messages": [
+            {"role": "system", "content": _SYSTEM_INSTRUCTIONS},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.0,
+        "max_tokens": 2048,
+    }
+    log.info("Calling OpenAI (attempt %d/%d) model=%s", attempt, MAX_RETRIES, OPENAI_MODEL)
+    response = requests.post(OPENAI_ENDPOINT, json=payload, headers=headers, timeout=OLLAMA_TIMEOUT)
+    response.raise_for_status()
+    data = response.json()
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError) as exc:
+        log.error("Unexpected OpenAI response structure: %s", exc)
+        raise
+
+
+def _call_provider(prompt: str, attempt: int) -> str:
+    """Dispatch to the active provider's API call function."""
+    if PROVIDER == "gemini":
+        return _call_gemini(prompt, attempt)
+    elif PROVIDER == "openai":
+        return _call_openai(prompt, attempt)
+    else:
+        return _call_ollama(prompt, attempt)
+
+
 def invoke_llm_with_retry(prompt: str) -> str:
     """
-    Call Ollama with exponential backoff. Exits 1 after MAX_RETRIES failures.
+    Call the configured LLM provider with exponential backoff.
+    Exits 1 after MAX_RETRIES failures.
     Escalation contract: never silently skip — always fail loudly.
     """
+    model_name = _get_active_model_name()
+    log.info("Provider: %s | Model: %s", PROVIDER, model_name)
+
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            raw_response = _call_ollama(prompt, attempt)
+            raw_response = _call_provider(prompt, attempt)
             audit.write(
                 "llm_response",
                 {
                     "attempt": attempt,
-                    "model": OLLAMA_MODEL,
+                    "provider": PROVIDER,
+                    "model": model_name,
                     "raw_response_length": len(raw_response),
                     "raw_response_preview": raw_response[:500],
                 },
             )
             return raw_response
         except requests.exceptions.ConnectionError as exc:
-            log.error("Ollama connection refused (attempt %d): %s", attempt, exc)
+            log.error("Connection refused (attempt %d): %s", attempt, exc)
         except requests.exceptions.Timeout:
-            log.error("Ollama request timed out after %ds (attempt %d)", OLLAMA_TIMEOUT, attempt)
+            log.error("Request timed out after %ds (attempt %d)", OLLAMA_TIMEOUT, attempt)
         except requests.exceptions.HTTPError as exc:
-            log.error("Ollama HTTP error (attempt %d): %s", attempt, exc)
-        except (KeyError, json.JSONDecodeError) as exc:
-            log.error("Ollama response parse error (attempt %d): %s", attempt, exc)
+            log.error("HTTP error (attempt %d): %s", attempt, exc)
+        except (KeyError, IndexError, json.JSONDecodeError) as exc:
+            log.error("Response parse error (attempt %d): %s", attempt, exc)
 
         if attempt < MAX_RETRIES:
             wait = RETRY_BACKOFF_SECONDS * attempt
@@ -296,16 +396,17 @@ def invoke_llm_with_retry(prompt: str) -> str:
     audit.write(
         "llm_failure",
         {
-            "model": OLLAMA_MODEL,
+            "provider": PROVIDER,
+            "model": model_name,
             "retries": MAX_RETRIES,
             "action": "PIPELINE_FAILED_LOUDLY",
             "note": "GitHub Actions must file an Issue per escalation contract.",
         },
     )
     log.critical(
-        "LLM failed after %d retries. Exiting 1. "
+        "LLM failed after %d retries (provider=%s, model=%s). Exiting 1. "
         "Pipeline must file a GitHub Issue — see escalation contract in agents.md.",
-        MAX_RETRIES,
+        MAX_RETRIES, PROVIDER, model_name,
     )
     sys.exit(1)
 

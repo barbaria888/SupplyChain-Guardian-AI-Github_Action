@@ -1,0 +1,326 @@
+# action.yml — GitHub Marketplace Action Definition
+# ==================================================
+# Proactive DevSecOps Supply Chain Guardian
+#
+# Autonomous CVE detection and AI-driven Dockerfile remediation.
+# Scans container images, patches vulnerabilities using a local or
+# cloud LLM, validates the fix in an ephemeral KinD cluster, and
+# opens a human-reviewable Pull Request.
+#
+# Usage:
+#   - uses: barbaria888/SupplyChain-Guardian-AI@v1
+#     with:
+#       dockerfile: './Dockerfile'
+#       provider: 'ollama'
+#
+# Owner: @AIPatcher + @SecOps + @SRE
+# ==================================================
+
+name: 'Supply Chain Guardian AI'
+description: >
+  Autonomous CVE detection & AI-driven Dockerfile remediation.
+  Scans container images with Trivy, patches vulnerabilities using
+  local Ollama (CPU-only, zero data egress) or cloud LLMs (Gemini, OpenAI),
+  validates the fix in an ephemeral KinD cluster, and opens a PR with proof.
+
+author: 'barbaria888'
+
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+inputs:
+  dockerfile:
+    description: 'Path to the Dockerfile to scan and patch'
+    required: false
+    default: 'Dockerfile'
+
+  image-ref:
+    description: 'Pre-built image reference to scan (overrides dockerfile build)'
+    required: false
+    default: ''
+
+  severity:
+    description: 'Comma-separated Trivy severity levels to act on'
+    required: false
+    default: 'CRITICAL,HIGH'
+
+  provider:
+    description: 'LLM inference provider: ollama, gemini, or openai'
+    required: false
+    default: 'ollama'
+
+  model:
+    description: 'Model name/tag for the selected provider (e.g., llama3.2:1b, gemini-2.0-flash, gpt-4o-mini)'
+    required: false
+    default: ''
+
+  api-key:
+    description: 'API key for cloud providers (gemini, openai). Not required for ollama.'
+    required: false
+    default: ''
+
+  trivy-version:
+    description: 'Trivy version to use for scanning'
+    required: false
+    default: '0.55.0'
+
+  kind-enabled:
+    description: 'Enable KinD cluster validation of the patched image'
+    required: false
+    default: 'true'
+
+  kind-config:
+    description: 'Path to KinD cluster configuration file'
+    required: false
+    default: '.kind/cluster-config.yaml'
+
+  k8s-manifests:
+    description: 'Path to Kubernetes manifests directory'
+    required: false
+    default: 'k8s/'
+
+  create-pr:
+    description: 'Automatically create a Pull Request with the fix'
+    required: false
+    default: 'true'
+
+  pr-branch:
+    description: 'Branch name for the remediation PR'
+    required: false
+    default: 'auto-patcher/cve-remediation'
+
+  pr-labels:
+    description: 'Comma-separated labels for the remediation PR'
+    required: false
+    default: 'security,automated-patch,supply-chain-guardian'
+
+  fail-on-vulnerability:
+    description: 'Fail the action if vulnerabilities are found and cannot be patched'
+    required: false
+    default: 'true'
+
+  ollama-timeout:
+    description: 'Timeout in seconds for LLM inference calls'
+    required: false
+    default: '120'
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+outputs:
+  vulnerabilities-found:
+    description: 'Whether CRITICAL/HIGH vulnerabilities were found'
+    value: ${{ steps.scan.outputs.has_vulnerabilities }}
+
+  patch-applied:
+    description: 'Whether the AI successfully generated a valid patch'
+    value: ${{ steps.remediate.outputs.patch_applied }}
+
+  smoke-test-passed:
+    description: 'Whether the patched Dockerfile compiled successfully'
+    value: ${{ steps.smoke-test.outputs.smoke_passed }}
+
+  kind-validation-passed:
+    description: 'Whether the patched image passed KinD cluster validation'
+    value: ${{ steps.kind-validate.outputs.validation_passed }}
+
+  pr-url:
+    description: 'URL of the created/updated Pull Request'
+    value: ${{ steps.create-pr.outputs.pull-request-url }}
+
+  trivy-results-path:
+    description: 'Path to the Trivy scan results JSON'
+    value: 'trivy-results.json'
+
+  audit-log-path:
+    description: 'Path to the patch audit log'
+    value: 'patch_audit.log'
+
+# ---------------------------------------------------------------------------
+# Composite Action Steps
+# ---------------------------------------------------------------------------
+runs:
+  using: 'composite'
+  steps:
+    # ==================================================================
+    # 1. SETUP — Install dependencies
+    # ==================================================================
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+
+    - name: Install patching engine dependencies
+      shell: bash
+      run: pip install -r ${{ github.action_path }}/scripts/requirements.txt
+
+    # ==================================================================
+    # 2. SCAN — Trivy vulnerability analysis (@SecOps)
+    # ==================================================================
+    - name: Build image for scanning (if no image-ref provided)
+      if: inputs.image-ref == ''
+      shell: bash
+      run: |
+        docker build \
+          --tag "guardian-scan:baseline" \
+          --file "${{ inputs.dockerfile }}" \
+          .
+
+    - name: Run Trivy vulnerability scan
+      id: scan
+      shell: bash
+      run: |
+        IMAGE_REF="${{ inputs.image-ref }}"
+        if [[ -z "$IMAGE_REF" ]]; then
+          IMAGE_REF="guardian-scan:baseline"
+        fi
+
+        # Install Trivy if not available
+        if ! command -v trivy &> /dev/null; then
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v${{ inputs.trivy-version }}
+        fi
+
+        trivy image \
+          --format json \
+          --output trivy-results.json \
+          --severity "${{ inputs.severity }}" \
+          --ignore-unfixed \
+          "$IMAGE_REF" || true
+
+        # Count actionable CVEs
+        CVE_COUNT=$(python3 - <<'EOF'
+        import json, sys
+        try:
+            data = json.load(open("trivy-results.json"))
+        except Exception:
+            print("0", end="")
+            sys.exit(0)
+        sev = set(s.strip() for s in "${{ inputs.severity }}".split(","))
+        count = sum(
+            1 for r in data.get("Results", [])
+            for v in (r.get("Vulnerabilities") or [])
+            if v.get("Severity") in sev and v.get("FixedVersion", "")
+        )
+        print(count, end="")
+        EOF
+        )
+        echo "Actionable CVE count: $CVE_COUNT"
+        if [[ "$CVE_COUNT" -gt 0 ]]; then
+          echo "has_vulnerabilities=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_vulnerabilities=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    # ==================================================================
+    # 3. REMEDIATE — AI patching engine (@AIPatcher)
+    # ==================================================================
+    - name: Install Ollama (if provider=ollama)
+      if: steps.scan.outputs.has_vulnerabilities == 'true' && inputs.provider == 'ollama'
+      shell: bash
+      run: |
+        curl -fsSL https://ollama.com/install.sh | sh
+        ollama serve &
+        for i in $(seq 1 30); do
+          curl -sf http://localhost:11434 > /dev/null 2>&1 && break
+          sleep 1
+        done
+        curl -sf http://localhost:11434 || { echo "Ollama failed to start."; exit 1; }
+
+        MODEL="${{ inputs.model }}"
+        if [[ -z "$MODEL" ]]; then MODEL="llama3.2:1b"; fi
+        ollama pull "$MODEL"
+
+    - name: Run AI Patching Engine
+      id: remediate
+      if: steps.scan.outputs.has_vulnerabilities == 'true'
+      shell: bash
+      env:
+        PROVIDER: ${{ inputs.provider }}
+        API_KEY: ${{ inputs.api-key }}
+        OLLAMA_HOST: "http://localhost:11434"
+        OLLAMA_MODEL: ${{ inputs.model || 'llama3.2:1b' }}
+        GEMINI_MODEL: ${{ inputs.model || 'gemini-2.0-flash' }}
+        OPENAI_MODEL: ${{ inputs.model || 'gpt-4o-mini' }}
+        OLLAMA_TIMEOUT: ${{ inputs.ollama-timeout }}
+        TRIVY_RESULTS: "trivy-results.json"
+        DOCKERFILE_PATH: ${{ inputs.dockerfile }}
+        PATCHED_DOCKERFILE_PATH: "Dockerfile.patched"
+        AUDIT_LOG_PATH: "patch_audit.log"
+      run: |
+        python ${{ github.action_path }}/scripts/remediate_cve.py
+        if [[ -f "Dockerfile.patched" ]]; then
+          echo "patch_applied=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "patch_applied=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    # ==================================================================
+    # 4. SMOKE TEST — Docker build compilation gate
+    # ==================================================================
+    - name: Smoke test — Docker build with patched Dockerfile
+      id: smoke-test
+      if: steps.remediate.outputs.patch_applied == 'true'
+      shell: bash
+      run: |
+        if docker build -f Dockerfile.patched -t "guardian-scan:patched" .; then
+          echo "SMOKE TEST PASSED"
+          echo "smoke_passed=true" >> "$GITHUB_OUTPUT"
+          cp Dockerfile.patched "${{ inputs.dockerfile }}"
+        else
+          echo "::error::Smoke test FAILED — patched Dockerfile has syntax errors"
+          echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+    # ==================================================================
+    # 5. KIND VALIDATION — Ephemeral cluster test (@SRE)
+    # ==================================================================
+    - name: Set up KinD cluster
+      if: steps.smoke-test.outputs.smoke_passed == 'true' && inputs.kind-enabled == 'true'
+      uses: helm/kind-action@v1.10.0
+      with:
+        cluster_name: guardian-test
+        config: ${{ inputs.kind-config }}
+        wait: 120s
+
+    - name: Load and deploy patched image to KinD
+      id: kind-validate
+      if: steps.smoke-test.outputs.smoke_passed == 'true' && inputs.kind-enabled == 'true'
+      shell: bash
+      run: |
+        kind load docker-image "guardian-scan:patched" --name guardian-test
+
+        # Dynamic image tag swap in manifests
+        find ${{ inputs.k8s-manifests }} -name '*.yaml' -o -name '*.yml' | while read f; do
+          sed -i 's|image:.*guardian.*|image: guardian-scan:patched|g' "$f" || true
+        done
+
+        kubectl apply -f ${{ inputs.k8s-manifests }}
+        if kubectl wait --for=condition=available --timeout=90s deployment -l managed-by=supply-chain-guardian -n default 2>/dev/null || \
+           kubectl wait --for=condition=available --timeout=90s deployment --all -n default; then
+          echo "validation_passed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "validation_passed=false" >> "$GITHUB_OUTPUT"
+          echo "::error::KinD validation FAILED — deployment did not reach Ready state"
+          exit 1
+        fi
+
+    # ==================================================================
+    # 6. ARTIFACTS — Upload compliance evidence
+    # ==================================================================
+    - name: Upload scan and audit artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: supply-chain-guardian-artifacts
+        path: |
+          trivy-results.json
+          patch_audit.log
+          Dockerfile.patched
+        retention-days: 90
+        if-no-files-found: warn

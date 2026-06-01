@@ -15,7 +15,7 @@ import logging
 import os
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import uvicorn
 from fastapi import FastAPI
@@ -69,7 +69,7 @@ async def root() -> JSONResponse:
             "service": "guardian-demo-service",
             "version": APP_VERSION,
             "environment": APP_ENV,
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     )
 
