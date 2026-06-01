@@ -64,7 +64,7 @@ jobs:
             .
 
       - name: Run Trivy — Full image scan
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: "${{ env.APP_IMAGE }}:baseline"
           format: "json"
@@ -396,7 +396,7 @@ jobs:
             .
 
       - name: Re-scan patched image with Trivy
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.29.0
         with:
           image-ref: "${{ env.PATCHED_TAG }}"
           format: "json"
