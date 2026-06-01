@@ -18,6 +18,11 @@ LABEL guardian.dev/baseline="true"
 # Set working directory
 WORKDIR /app
 
+# Prevent Python from writing .pyc bytecode (critical for readOnlyRootFilesystem)
+# and ensure output is sent straight to stdout/stderr without buffering.
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 # Install dependencies
 # Pinned to an older pip version to simulate a real supply-chain vulnerability
 COPY src/requirements.txt .
@@ -39,8 +44,9 @@ USER appuser
 EXPOSE 8080
 
 # Health check at the Docker layer (supplements K8s probes)
+# Uses Python's built-in urllib — works on any base image (alpine or slim).
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
-    CMD wget -qO- http://localhost:8080/healthz || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')" || exit 1
 
 # Run the application
 CMD ["python", "main.py"]

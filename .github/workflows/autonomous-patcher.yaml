@@ -346,14 +346,19 @@ jobs:
           echo "Image loaded successfully."
 
       - name: Patch deployment manifest with new image tag
-        # Dynamic tag swap: replaces the generic image ref with the exact
-        # patched tag so KinD uses the correct local image.
+        # Dynamic tag swap: replaces any guardian-demo:* image ref with the
+        # exact patched tag so KinD uses the correct local image.
+        # Also forces imagePullPolicy: Never so KinD doesn't attempt a registry pull.
         run: |
           sed -i \
-            "s|image: ${{ env.APP_IMAGE }}:latest|image: ${{ env.PATCHED_TAG }}|g" \
+            "s|image: ${{ env.APP_IMAGE }}:.*|image: ${{ env.PATCHED_TAG }}|g" \
+            k8s/deployment.yaml
+          sed -i \
+            's|imagePullPolicy:.*|imagePullPolicy: Never|g' \
             k8s/deployment.yaml
           echo "Image tag in deployment.yaml updated to: ${{ env.PATCHED_TAG }}"
-          grep "image:" k8s/deployment.yaml
+          echo "--- Final deployment.yaml (image lines) ---"
+          grep -E "image:|imagePullPolicy:" k8s/deployment.yaml
 
       - name: Deploy to KinD cluster
         run: |
@@ -363,12 +368,21 @@ jobs:
 
       - name: Wait for deployment readiness
         run: |
-          echo "Waiting for deployment to become available (timeout: 90s)..."
-          kubectl wait \
+          echo "Waiting for deployment to become available (timeout: 120s)..."
+          if ! kubectl wait \
             --for=condition=available \
-            --timeout=90s \
+            --timeout=120s \
             deployment/${{ env.APP_NAME }} \
-            -n ${{ env.NAMESPACE }}
+            -n ${{ env.NAMESPACE }}; then
+            echo "::error::Deployment did not become available within 120s"
+            echo "--- Pod Status ---"
+            kubectl get pods -n ${{ env.NAMESPACE }} -o wide
+            echo "--- Pod Descriptions ---"
+            kubectl describe pods -n ${{ env.NAMESPACE }} -l app=${{ env.APP_NAME }}
+            echo "--- Recent Events ---"
+            kubectl get events -n ${{ env.NAMESPACE }} --sort-by='.lastTimestamp' | tail -30
+            exit 1
+          fi
 
       - name: Run integration test gates
         env:

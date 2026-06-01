@@ -12,7 +12,7 @@ metadata:
     guardian.dev/last-scanned: "pending"
     guardian.dev/cve-status: "pending"
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: guardian-demo
@@ -26,6 +26,7 @@ spec:
       labels:
         app: guardian-demo
         version: "1.0.0"
+        managed-by: supply-chain-guardian
     spec:
       # -----------------------------------------------------------------------
       # Security Context — Pod Level
@@ -41,11 +42,13 @@ spec:
 
       # -----------------------------------------------------------------------
       # Topology spread for HA across nodes
+      # ScheduleAnyway allows single-node or CI clusters (e.g. KinD)
+      # to still schedule all replicas without hanging Pending.
       # -----------------------------------------------------------------------
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: DoNotSchedule
+          whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
               app: guardian-demo
@@ -92,9 +95,14 @@ spec:
             - name: APP_ENV
               value: "production"
             - name: APP_VERSION
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.labels['version']
+              value: "1.0.0"
+            # Prevents Python from writing .pyc bytecode files, which would
+            # fail under readOnlyRootFilesystem and crash the process.
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            # Ensure Python output is not buffered (useful for container logging)
+            - name: PYTHONUNBUFFERED
+              value: "1"
 
           # -------------------------------------------------------------------
           # Probes — must match /healthz and /readyz routes in src/main.py
@@ -128,7 +136,7 @@ spec:
 
           # -------------------------------------------------------------------
           # Volume Mounts
-          # readOnlyRootFilesystem requires a writable tmp for uvicorn
+          # readOnlyRootFilesystem requires writable tmp for uvicorn
           # -------------------------------------------------------------------
           volumeMounts:
             - name: tmp-dir

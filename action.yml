@@ -299,15 +299,24 @@ runs:
         # Dynamic image tag swap in manifests
         find ${{ inputs.k8s-manifests }} -name '*.yaml' -o -name '*.yml' | while read f; do
           sed -i 's|image:.*guardian.*|image: guardian-scan:patched|g' "$f" || true
+          # Force KinD to use the local image, never pull from a registry
+          sed -i 's|imagePullPolicy:.*|imagePullPolicy: Never|g' "$f" || true
         done
 
         kubectl apply -f ${{ inputs.k8s-manifests }}
-        if kubectl wait --for=condition=available --timeout=90s deployment -l managed-by=supply-chain-guardian -n default 2>/dev/null || \
-           kubectl wait --for=condition=available --timeout=90s deployment --all -n default; then
+        echo "--- Applied manifests. Waiting for deployment readiness (120s)... ---"
+        if kubectl wait --for=condition=available --timeout=120s deployment -l managed-by=supply-chain-guardian -n default 2>/dev/null || \
+           kubectl wait --for=condition=available --timeout=120s deployment --all -n default; then
           echo "validation_passed=true" >> "$GITHUB_OUTPUT"
         else
           echo "validation_passed=false" >> "$GITHUB_OUTPUT"
           echo "::error::KinD validation FAILED — deployment did not reach Ready state"
+          echo "--- Pod Status ---"
+          kubectl get pods -n default -o wide
+          echo "--- Pod Descriptions ---"
+          kubectl describe pods -n default
+          echo "--- Recent Events ---"
+          kubectl get events -n default --sort-by='.lastTimestamp' | tail -30
           exit 1
         fi
 

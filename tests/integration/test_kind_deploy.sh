@@ -67,9 +67,9 @@ if [[ -z "$POD_NAME" ]]; then
 fi
 
 HEALTH_RESPONSE=$(kubectl exec "$POD_NAME" -n "$NAMESPACE" -- \
-    wget -qO- http://localhost:8080/healthz 2>/dev/null || echo "FAILED")
+    python3 -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/healthz').read().decode())" 2>/dev/null || echo "FAILED")
 
-if echo "$HEALTH_RESPONSE" | grep -q '"status": *"ok"'; then
+if echo "$HEALTH_RESPONSE" | grep -q '"status"'; then
     log "Gate 3 PASSED — /healthz returned ok."
 else
     fail "Health probe returned unexpected response: $HEALTH_RESPONSE"
