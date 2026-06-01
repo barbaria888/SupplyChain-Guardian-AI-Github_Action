@@ -1,3 +1,1 @@
-tests/unit/
-tests/integration/
-scripts/
+# tests package marker

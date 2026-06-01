@@ -196,13 +196,48 @@ jobs:
           OLLAMA_MODEL: ${{ env.OLLAMA_MODEL }}
           TRIVY_RESULTS: "trivy-results.json"
           DOCKERFILE_PATH: "Dockerfile"
+          PATCHED_DOCKERFILE_PATH: "Dockerfile.patched"
           AUDIT_LOG_PATH: "patch_audit.log"
         run: |
-          echo "Invoking remediate_cve.py..."
+          echo "Invoking remediate_cve.py (side-by-side mode)..."
           python scripts/remediate_cve.py
-          echo "Patching engine completed."
+          echo "Patching engine completed. Output: Dockerfile.patched"
+          echo "Original Dockerfile is PRESERVED."
+
+      # -----------------------------------------------------------------------
+      # SMOKE TEST GATE — Build the patched Dockerfile BEFORE uploading.
+      # This catches hallucinated syntax (CREATEGROUP, ADDuser, etc.) that
+      # passes primitive validation but fails Docker's parser.
+      # If this fails, the original Dockerfile is untouched and no artifact
+      # containing garbage is ever uploaded.
+      # -----------------------------------------------------------------------
+      - name: Smoke test — Docker build with patched Dockerfile
+        id: smoke_test
+        run: |
+          echo "Running docker build smoke test against Dockerfile.patched..."
+          if docker build -f Dockerfile.patched -t "${{ env.APP_IMAGE }}:smoke-test" .; then
+            echo "SMOKE TEST PASSED — Dockerfile.patched compiles successfully."
+            echo "smoke_passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::SMOKE TEST FAILED — Dockerfile.patched contains syntax errors."
+            echo "::error::The LLM likely hallucinated invalid Docker instructions."
+            echo "::error::Original Dockerfile is preserved. No artifact will be uploaded."
+            echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
+            echo "Dumping patched Dockerfile for audit:"
+            cat Dockerfile.patched
+            exit 1
+          fi
+
+      - name: Promote patched Dockerfile (only after smoke test passes)
+        if: steps.smoke_test.outputs.smoke_passed == 'true'
+        run: |
+          echo "Smoke test passed. Promoting Dockerfile.patched -> Dockerfile"
+          cp Dockerfile.patched Dockerfile
+          echo "Promotion complete. Diff:"
+          git diff --stat Dockerfile || true
 
       - name: Verify Dockerfile was modified
+        if: steps.smoke_test.outputs.smoke_passed == 'true'
         run: |
           if git diff --quiet Dockerfile; then
             echo "::warning::Dockerfile was not changed by the patching engine. CVE may still be present."
@@ -220,7 +255,8 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
-      - name: Upload patched Dockerfile
+      - name: Upload patched Dockerfile (only if smoke test passed)
+        if: steps.smoke_test.outputs.smoke_passed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: patched-dockerfile
@@ -228,7 +264,16 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-      - name: File escalation Issue on LLM failure
+      - name: Upload rejected patch for forensic audit (smoke test failed)
+        if: steps.smoke_test.outputs.smoke_passed == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rejected-patch-forensic
+          path: Dockerfile.patched
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: File escalation Issue on remediation failure
         if: failure()
         uses: actions/github-script@v7
         with:
@@ -241,14 +286,18 @@ jobs:
               body: [
                 `## AI Patching Engine Failure`,
                 ``,
-                `The \`remediate\` job failed after ${process.env.MAX_RETRIES || 3} retries.`,
+                `The \`remediate\` job failed. Possible causes:`,
+                `- LLM failed after 3 retries (connection/timeout error)`,
+                `- LLM hallucinated invalid Docker syntax (caught by instruction whitelist)`,
+                `- Patched Dockerfile failed \`docker build\` smoke test (compilation error)`,
                 ``,
                 `**Workflow Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
                 ``,
                 `### Required Actions`,
                 `1. Review the \`patch-audit-log\` artifact for the raw LLM prompt and response.`,
-                `2. Manually patch the Dockerfile to remediate the CVEs in \`trivy-results\` artifact.`,
-                `3. Close this issue once the CVEs are resolved.`,
+                `2. If present, review the \`rejected-patch-forensic\` artifact for the hallucinated Dockerfile.`,
+                `3. Manually patch the Dockerfile to remediate the CVEs in \`trivy-results\` artifact.`,
+                `4. Close this issue once the CVEs are resolved.`,
                 ``,
                 `cc: @${context.repo.owner}`,
               ].join('\n'),

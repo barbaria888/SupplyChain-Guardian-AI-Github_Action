@@ -5,8 +5,9 @@ Tests the deterministic, non-LLM layers of the remediation engine:
   - Trivy JSON parsing and minimization
   - Markdown fence stripping (hallucination defense)
   - Dockerfile primitive validation
+  - Dockerfile instruction whitelist (catches hallucinated Docker syntax)
   - Graceful early-exit on empty CVE list
-  - Atomic file write behavior
+  - Side-by-side file write behavior
 
 These tests NEVER call Ollama — the LLM is mocked in all network tests.
 """
@@ -31,6 +32,7 @@ from remediate_cve import (  # noqa: E402
     _extract_cve_records,
     strip_markdown_fencing,
     validate_dockerfile_primitives,
+    validate_dockerfile_instructions,
     write_patched_dockerfile,
     build_prompt,
     load_and_minimize_trivy_report,
@@ -238,30 +240,141 @@ class TestBuildPrompt:
         assert "CVE-2024-9999" in prompt
         assert "zlib" in prompt
 
+    def test_prompt_contains_alpine_user_warning(self) -> None:
+        """The hardened prompt must contain the CREATEGROUP anti-hallucination rule."""
+        records = [{"VulnerabilityID": "CVE-2024-1234", "PkgName": "libssl",
+                    "InstalledVersion": "3.1.0", "FixedVersion": "3.1.5"}]
+        prompt = build_prompt(records, SAMPLE_DOCKERFILE)
+        assert "CREATEGROUP" in prompt
+        assert "ADDuser" in prompt
+        assert "RUN addgroup" in prompt
+
 
 # ---------------------------------------------------------------------------
-# 5. Atomic File Write
+# 5. Dockerfile Instruction Whitelist (Hallucination Defense)
+# ---------------------------------------------------------------------------
+class TestValidateDockerfileInstructions:
+    def test_valid_dockerfile_passes(self) -> None:
+        """A standard, well-formed Dockerfile should pass without error."""
+        validate_dockerfile_instructions(PATCHED_DOCKERFILE)
+
+    def test_hallucinated_creategroup_exits_1(self) -> None:
+        """The exact hallucination from the bug report: CREATEGROUP."""
+        hallucinated = "FROM python:3.12\nCREATEGROUP 1000 appgroup\nCMD ['python']"
+        with pytest.raises(SystemExit) as exc_info:
+            validate_dockerfile_instructions(hallucinated)
+        assert exc_info.value.code == 1
+
+    def test_hallucinated_adduser_with_capital_d_exits_1(self) -> None:
+        """ADDuser (capital D) is not a Dockerfile instruction."""
+        hallucinated = "FROM python:3.12\nADDuser -u 1000 appuser\nCMD ['python']"
+        with pytest.raises(SystemExit) as exc_info:
+            validate_dockerfile_instructions(hallucinated)
+        assert exc_info.value.code == 1
+
+    def test_hallucinated_install_exits_1(self) -> None:
+        """INSTALL is not a Dockerfile instruction."""
+        hallucinated = "FROM python:3.12\nINSTALL python3\nCMD ['python']"
+        with pytest.raises(SystemExit) as exc_info:
+            validate_dockerfile_instructions(hallucinated)
+        assert exc_info.value.code == 1
+
+    def test_hallucinated_groupadd_exits_1(self) -> None:
+        """GROUPADD is a Linux command, not a Dockerfile instruction."""
+        hallucinated = "FROM python:3.12\nGROUPADD appgroup\nCMD ['python']"
+        with pytest.raises(SystemExit) as exc_info:
+            validate_dockerfile_instructions(hallucinated)
+        assert exc_info.value.code == 1
+
+    def test_run_addgroup_passes(self) -> None:
+        """addgroup under RUN is the CORRECT way — must pass."""
+        valid = "FROM python:3.12\nRUN addgroup -g 1000 appgroup\nCMD ['python']"
+        validate_dockerfile_instructions(valid)  # must not exit
+
+    def test_comments_are_ignored(self) -> None:
+        content = "# This is a comment\nFROM python:3.12\n# Another comment\nCMD ['python']"
+        validate_dockerfile_instructions(content)
+
+    def test_empty_lines_are_ignored(self) -> None:
+        content = "FROM python:3.12\n\n\nCMD ['python']"
+        validate_dockerfile_instructions(content)
+
+    def test_continuation_lines_are_not_checked(self) -> None:
+        """Lines after a backslash are continuation args, not instructions."""
+        content = (
+            "FROM python:3.12\n"
+            "RUN addgroup -g 1000 appgroup \\\n"
+            "    && adduser -u 1000 -G appgroup -D appuser\n"
+            "CMD ['python']"
+        )
+        validate_dockerfile_instructions(content)  # must not exit
+
+    def test_multiple_hallucinations_all_reported(self) -> None:
+        """Multiple bad lines should all be caught."""
+        content = "FROM python:3.12\nCREATEGROUP foo\nINSTALL bar\nCMD ['python']"
+        with pytest.raises(SystemExit) as exc_info:
+            validate_dockerfile_instructions(content)
+        assert exc_info.value.code == 1
+
+    def test_case_insensitive_instruction_matching(self) -> None:
+        """Docker instructions are case-insensitive (from, From, FROM all valid)."""
+        content = "from python:3.12\nworkdir /app\ncmd ['python']"
+        validate_dockerfile_instructions(content)  # must not exit
+
+    def test_full_realistic_dockerfile(self) -> None:
+        """Our actual project Dockerfile structure should pass."""
+        realistic = (
+            "FROM python:3.12-slim\n"
+            "LABEL maintainer='team@example.com'\n"
+            "WORKDIR /app\n"
+            "COPY src/requirements.txt .\n"
+            "RUN pip install --no-cache-dir -r requirements.txt\n"
+            "COPY src/ .\n"
+            "RUN addgroup -g 1000 appgroup \\\n"
+            "    && adduser -u 1000 -G appgroup -s /bin/sh -D appuser \\\n"
+            "    && chown -R appuser:appgroup /app\n"
+            "USER appuser\n"
+            "EXPOSE 8080\n"
+            "HEALTHCHECK --interval=15s --timeout=3s CMD wget -qO- http://localhost:8080/healthz || exit 1\n"
+            "CMD ['python', 'main.py']\n"
+        )
+        validate_dockerfile_instructions(realistic)
+
+
+# ---------------------------------------------------------------------------
+# 6. Side-by-Side File Write
 # ---------------------------------------------------------------------------
 class TestWritePatchedDockerfile:
-    def test_writes_content_to_disk(self, tmp_path: Path) -> None:
-        target = tmp_path / "Dockerfile"
-        target.write_text(SAMPLE_DOCKERFILE)
-        write_patched_dockerfile(target, PATCHED_DOCKERFILE)
-        assert target.read_text() == PATCHED_DOCKERFILE
+    def test_writes_content_to_output_path(self, tmp_path: Path) -> None:
+        original = tmp_path / "Dockerfile"
+        output = tmp_path / "Dockerfile.patched"
+        original.write_text(SAMPLE_DOCKERFILE)
+        write_patched_dockerfile(output, PATCHED_DOCKERFILE, original_path=original)
+        assert output.read_text() == PATCHED_DOCKERFILE
+
+    def test_original_dockerfile_is_preserved(self, tmp_path: Path) -> None:
+        """The original Dockerfile must NEVER be modified."""
+        original = tmp_path / "Dockerfile"
+        output = tmp_path / "Dockerfile.patched"
+        original.write_text(SAMPLE_DOCKERFILE)
+        write_patched_dockerfile(output, PATCHED_DOCKERFILE, original_path=original)
+        assert original.read_text() == SAMPLE_DOCKERFILE  # UNCHANGED
 
     def test_tmp_file_cleaned_up_on_success(self, tmp_path: Path) -> None:
-        target = tmp_path / "Dockerfile"
-        target.write_text(SAMPLE_DOCKERFILE)
-        write_patched_dockerfile(target, PATCHED_DOCKERFILE)
-        tmp_sibling = target.with_suffix(".tmp")
+        original = tmp_path / "Dockerfile"
+        output = tmp_path / "Dockerfile.patched"
+        original.write_text(SAMPLE_DOCKERFILE)
+        write_patched_dockerfile(output, PATCHED_DOCKERFILE, original_path=original)
+        tmp_sibling = output.with_suffix(".tmp")
         assert not tmp_sibling.exists()
 
     def test_preserves_original_permissions(self, tmp_path: Path) -> None:
-        target = tmp_path / "Dockerfile"
-        target.write_text(SAMPLE_DOCKERFILE)
-        original_mode = target.stat().st_mode
-        write_patched_dockerfile(target, PATCHED_DOCKERFILE)
-        assert target.stat().st_mode == original_mode
+        original = tmp_path / "Dockerfile"
+        output = tmp_path / "Dockerfile.patched"
+        original.write_text(SAMPLE_DOCKERFILE)
+        original_mode = original.stat().st_mode
+        write_patched_dockerfile(output, PATCHED_DOCKERFILE, original_path=original)
+        assert output.stat().st_mode == original_mode
 
 
 # ---------------------------------------------------------------------------

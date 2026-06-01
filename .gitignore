@@ -18,6 +18,8 @@ trivy-results.json
 trivy-results-post-patch.json
 patch_audit.log
 kind-test-report.txt
+Dockerfile.patched
+Dockerfile.tmp
 
 # Environment files
 .env
