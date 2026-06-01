@@ -4,9 +4,7 @@ This document serves as the canonical reference for the **Supply Chain Guardian*
 
 ---
 
-## 🖼️ Google Cloud Platform Style Architecture Diagram
 
-![DevSecOps Supply Chain Guardian — Light Theme Architecture]()
 
 ---
 
