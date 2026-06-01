@@ -1,0 +1,78 @@
+# Phase 5 Compliance Checklist
+#
+# This file is the machine-verifiable version of the hardening checklist.
+# Run: python scripts/compliance_check.py
+# CI: Run automatically in the scan job before Trivy executes.
+
+checks:
+  # ---------------------------------------------------------------------------
+  # Zero Token Egress — Verify no external LLM API calls are made
+  # ---------------------------------------------------------------------------
+  - id: no_external_llm
+    description: >
+      No data is routed to external third-party model APIs (OpenAI, Anthropic,
+      Google AI Studio, etc.). All inference must use the local Ollama instance
+      at http://localhost:11434. This guarantees complete data privacy inside
+      the GitHub Actions network perimeter.
+    verify_command: >
+      grep -rn "openai\|anthropic\|generativelanguage.googleapis.com\|api.cohere" scripts/
+    expect_exit_code: 1   # grep exit 1 means no matches — PASS
+
+  # ---------------------------------------------------------------------------
+  # File Permissions Protection
+  # ---------------------------------------------------------------------------
+  - id: dockerfile_permissions
+    description: >
+      The patched Dockerfile must retain the original file mode. The remediate_cve.py
+      script uses stat() + chmod() before atomic rename to guarantee this.
+      Additionally, the Dockerfile must specify a non-root USER instruction.
+    verify_command: >
+      grep -E "^USER [^0]" Dockerfile
+    expect_exit_code: 0   # Must find a non-root USER line
+
+  # ---------------------------------------------------------------------------
+  # Artifact Traceability
+  # ---------------------------------------------------------------------------
+  - id: audit_log_exists
+    description: >
+      patch_audit.log must be produced by every pipeline run that invokes the
+      LLM. This log contains the full prompt, raw response, and outcome for
+      SOC 2 / internal audit cross-examination.
+    verify_command: >
+      test -f patch_audit.log
+    expect_exit_code: 0
+
+  - id: trivy_results_artifact
+    description: >
+      trivy-results.json must be saved as a GitHub Actions artifact with 90-day
+      retention so SRE reviewers can cross-examine the exact CVEs that
+      triggered the AI patch.
+    verify_command: >
+      grep -A5 "name: trivy-results" .github/workflows/autonomous-patcher.yaml |
+      grep "retention-days: 90"
+    expect_exit_code: 0
+
+  # ---------------------------------------------------------------------------
+  # runAsNonRoot Enforcement
+  # ---------------------------------------------------------------------------
+  - id: non_root_security_context
+    description: >
+      All Kubernetes manifests must enforce runAsNonRoot: true at both the
+      pod and container security context levels.
+    verify_command: >
+      grep -c "runAsNonRoot: true" k8s/deployment.yaml
+    expect_min_count: 2   # Must appear at least twice (pod + container level)
+
+  # ---------------------------------------------------------------------------
+  # No Hardcoded Secrets
+  # ---------------------------------------------------------------------------
+  - id: no_hardcoded_secrets
+    description: >
+      No API keys, tokens, or passwords may be hardcoded in any committed file.
+      All secrets must be passed via GitHub Actions secrets or environment
+      variables referencing ${{ secrets.* }}.
+    verify_command: >
+      grep -rn
+      "sk-[a-zA-Z0-9]\{20\}\|AKIA[A-Z0-9]\{16\}\|AIza[a-zA-Z0-9_-]\{35\}"
+      --include="*.py" --include="*.yaml" --include="*.yml" .
+    expect_exit_code: 1   # No matches = PASS

@@ -11,7 +11,7 @@ should be reported privately.
 
 ### Contact
 
-Email: `security@example.com`  
+Email: `arorahardik0811@gmail.com`  
 Response SLA: 48 hours for acknowledgement, 7 days for initial triage.
 
 ### Scope
