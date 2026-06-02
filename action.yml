@@ -152,14 +152,16 @@ runs:
     - name: Stage action requirements for caching
       shell: bash
       run: |
-        cp "${{ github.action_path }}/scripts/requirements.txt" "${{ github.workspace }}/.supply-chain-guardian-requirements.txt"
+        CACHE_DIR="${{ github.workspace }}/.github/supply-chain-guardian"
+        mkdir -p "$CACHE_DIR"
+        cp "${{ github.action_path }}/scripts/requirements.txt" "$CACHE_DIR/requirements.txt"
 
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
         cache: 'pip'
-        cache-dependency-path: '.supply-chain-guardian-requirements.txt'
+        cache-dependency-path: '.github/supply-chain-guardian/requirements.txt'
 
     - name: Install patching engine dependencies
       shell: bash
