@@ -59,7 +59,9 @@ MAX_RETRIES: int = 3
 RETRY_BACKOFF_SECONDS: float = 5.0
 
 # Required Dockerfile primitives — output is rejected if ANY are missing.
-REQUIRED_DOCKERFILE_PRIMITIVES: tuple[str, ...] = ("FROM",)
+REQUIRED_DOCKERFILE_PRIMITIVES: tuple[str, ...] = (
+    "FROM", "WORKDIR", "COPY", "USER", "EXPOSE", "HEALTHCHECK",
+)
 # At least one of these must be present (entrypoint definition).
 ENTRYPOINT_PRIMITIVES: tuple[str, ...] = ("CMD", "ENTRYPOINT")
 
@@ -207,6 +209,26 @@ def load_dockerfile(path: Path) -> str:
 _SYSTEM_INSTRUCTIONS = """\
 You are a Senior Security Engineer specializing in container hardening.
 Your task is to patch a Dockerfile to remediate the listed CVEs.
+
+CRITICAL RULE — PRESERVE ALL EXISTING RUNTIME BEHAVIOR:
+You MUST preserve every existing instruction in the Dockerfile. Never remove:
+  - WORKDIR
+  - CMD
+  - ENTRYPOINT
+  - USER
+  - COPY
+  - EXPOSE
+  - HEALTHCHECK
+  - RUN (user/group creation commands)
+These instructions are required for the container to function at runtime.
+Removing any of them will cause the container to crash in Kubernetes.
+
+You may ONLY modify:
+  - Base image versions (FROM tag)
+  - Vulnerable package versions
+  - pip / setuptools / wheel versions
+  - OS-level packages (apk add / apt-get install)
+Do NOT change application logic, user setup, working directories, or entrypoints.
 
 STRICT OUTPUT CONTRACT:
 - Output ONLY the complete, updated Dockerfile content.

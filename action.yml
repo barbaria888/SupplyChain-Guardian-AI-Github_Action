@@ -134,11 +134,11 @@ outputs:
 
   trivy-results-path:
     description: 'Path to the Trivy scan results JSON'
-    value: 'trivy-results.json'
+    value: ${{ github.workspace }}/trivy-results.json
 
   audit-log-path:
     description: 'Path to the patch audit log'
-    value: 'patch_audit.log'
+    value: ${{ github.workspace }}/patch_audit.log
 
 # ---------------------------------------------------------------------------
 # Composite Action Steps
@@ -147,7 +147,7 @@ runs:
   using: 'composite'
   steps:
     # ==================================================================
-    # 1. SETUP — Install dependencies
+    # 1. SETUP — Stage dependencies & install
     # ==================================================================
     - name: Stage action requirements for caching
       shell: bash
@@ -165,7 +165,7 @@ runs:
 
     - name: Install patching engine dependencies
       shell: bash
-      run: pip install -r ${{ github.action_path }}/scripts/requirements.txt
+      run: pip install -r "${{ github.action_path }}/scripts/requirements.txt"
 
     # ==================================================================
     # 2. SCAN — Trivy vulnerability analysis (@SecOps)
@@ -173,6 +173,7 @@ runs:
     - name: Build image for scanning (if no image-ref provided)
       if: inputs.image-ref == ''
       shell: bash
+      working-directory: ${{ github.workspace }}
       run: |
         docker build \
           --tag "guardian-scan:baseline" \
@@ -182,6 +183,7 @@ runs:
     - name: Run Trivy vulnerability scan
       id: scan
       shell: bash
+      working-directory: ${{ github.workspace }}
       run: |
         IMAGE_REF="${{ inputs.image-ref }}"
         if [[ -z "$IMAGE_REF" ]]; then
@@ -193,29 +195,35 @@ runs:
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v${{ inputs.trivy-version }}
         fi
 
+        TRIVY_OUT="${{ github.workspace }}/trivy-results.json"
         trivy image \
           --format json \
-          --output trivy-results.json \
+          --output "$TRIVY_OUT" \
           --severity "${{ inputs.severity }}" \
           --ignore-unfixed \
           "$IMAGE_REF" || true
 
+        if [[ ! -f "$TRIVY_OUT" ]]; then
+          echo "::error::Trivy scan produced no output file at $TRIVY_OUT"
+          echo '{"Results":[]}' > "$TRIVY_OUT"
+        fi
+
         # Count actionable CVEs
-        CVE_COUNT=$(python3 - <<'EOF'
+        CVE_COUNT=$(python3 - <<'PYEOF'
         import json, sys
         try:
-            data = json.load(open("trivy-results.json"))
+            data = json.load(open("${{ github.workspace }}/trivy-results.json"))
         except Exception:
             print("0", end="")
             sys.exit(0)
-        sev = set(s.strip() for s in "${{ inputs.severity }}".split(","))
+        sev = {"CRITICAL", "HIGH"}
         count = sum(
             1 for r in data.get("Results", [])
             for v in (r.get("Vulnerabilities") or [])
             if v.get("Severity") in sev and v.get("FixedVersion", "")
         )
         print(count, end="")
-        EOF
+        PYEOF
         )
         echo "Actionable CVE count: $CVE_COUNT"
         if [[ "$CVE_COUNT" -gt 0 ]]; then
@@ -247,6 +255,7 @@ runs:
       id: remediate
       if: steps.scan.outputs.has_vulnerabilities == 'true'
       shell: bash
+      working-directory: ${{ github.workspace }}
       env:
         PROVIDER: ${{ inputs.provider }}
         API_KEY: ${{ inputs.api-key }}
@@ -255,38 +264,122 @@ runs:
         GEMINI_MODEL: ${{ inputs.model || 'gemini-2.0-flash' }}
         OPENAI_MODEL: ${{ inputs.model || 'gpt-4o-mini' }}
         OLLAMA_TIMEOUT: ${{ inputs.ollama-timeout }}
-        TRIVY_RESULTS: "trivy-results.json"
+        TRIVY_RESULTS: ${{ github.workspace }}/trivy-results.json
         DOCKERFILE_PATH: ${{ inputs.dockerfile }}
-        PATCHED_DOCKERFILE_PATH: "Dockerfile.patched"
-        AUDIT_LOG_PATH: "patch_audit.log"
+        PATCHED_DOCKERFILE_PATH: ${{ github.workspace }}/Dockerfile.patched
+        AUDIT_LOG_PATH: ${{ github.workspace }}/patch_audit.log
       run: |
-        python ${{ github.action_path }}/scripts/remediate_cve.py
-        if [[ -f "Dockerfile.patched" ]]; then
+        python "${{ github.action_path }}/scripts/remediate_cve.py"
+        if [[ -f "${{ github.workspace }}/Dockerfile.patched" ]]; then
           echo "patch_applied=true" >> "$GITHUB_OUTPUT"
         else
+          echo "::error::Patching engine completed but Dockerfile.patched was not created."
           echo "patch_applied=false" >> "$GITHUB_OUTPUT"
+          exit 1
         fi
 
     # ==================================================================
-    # 4. SMOKE TEST — Docker build compilation gate
+    # 4. DOCKERFILE INTEGRITY GATE
+    # ==================================================================
+    - name: Dockerfile integrity gate
+      if: steps.remediate.outputs.patch_applied == 'true'
+      shell: bash
+      run: |
+        PATCHED="${{ github.workspace }}/Dockerfile.patched"
+        echo "Validating required instructions in $PATCHED..."
+        MISSING=""
+        for INSTR in FROM WORKDIR COPY USER EXPOSE HEALTHCHECK CMD; do
+          if ! grep -qiE "^[[:space:]]*${INSTR}[[:space:]]" "$PATCHED"; then
+            echo "::error::Missing required instruction: $INSTR"
+            MISSING="$MISSING $INSTR"
+          fi
+        done
+        if [[ -n "$MISSING" ]]; then
+          echo "::error::Dockerfile integrity check FAILED. Missing:$MISSING"
+          echo "--- Rejected Dockerfile ---"
+          cat "$PATCHED"
+          exit 1
+        fi
+        echo "Dockerfile integrity gate PASSED."
+
+    # ==================================================================
+    # 5. SMOKE TEST — Docker build + runtime validation
     # ==================================================================
     - name: Smoke test — Docker build with patched Dockerfile
       id: smoke-test
       if: steps.remediate.outputs.patch_applied == 'true'
       shell: bash
+      working-directory: ${{ github.workspace }}
       run: |
-        if docker build -f Dockerfile.patched -t "guardian-scan:patched" .; then
-          echo "SMOKE TEST PASSED"
-          echo "smoke_passed=true" >> "$GITHUB_OUTPUT"
-          cp Dockerfile.patched "${{ inputs.dockerfile }}"
-        else
-          echo "::error::Smoke test FAILED — patched Dockerfile has syntax errors"
+        PATCHED="${{ github.workspace }}/Dockerfile.patched"
+        SMOKE_IMAGE="guardian-scan:smoke-test"
+
+        # --- Build gate ---
+        if ! docker build -f "$PATCHED" -t "$SMOKE_IMAGE" .; then
+          echo "::error::Smoke test FAILED — patched Dockerfile has build errors"
           echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
           exit 1
         fi
 
+        # --- Docker metadata inspection ---
+        IMG_CMD=$(docker inspect "$SMOKE_IMAGE" --format='{{json .Config.Cmd}}')
+        IMG_WORKDIR=$(docker inspect "$SMOKE_IMAGE" --format='{{json .Config.WorkingDir}}')
+        echo "Image CMD: $IMG_CMD"
+        echo "Image WorkingDir: $IMG_WORKDIR"
+
+        if [[ "$IMG_CMD" == "null" || "$IMG_CMD" == "[]" || -z "$IMG_CMD" ]]; then
+          echo "::error::Docker inspect: CMD is empty. Container will exit immediately."
+          echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+        if [[ "$IMG_WORKDIR" == '""' || -z "$IMG_WORKDIR" ]]; then
+          echo "::error::Docker inspect: WorkingDir is empty."
+          echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+        # --- Runtime validation ---
+        CONTAINER_NAME="guardian-smoke-$$"
+        docker run -d --name "$CONTAINER_NAME" -p 18080:8080 "$SMOKE_IMAGE"
+        echo "Container started. Waiting 15 seconds for stability check..."
+        sleep 15
+
+        RUNNING=$(docker inspect "$CONTAINER_NAME" --format='{{.State.Running}}' 2>/dev/null || echo "false")
+        EXIT_CODE=$(docker inspect "$CONTAINER_NAME" --format='{{.State.ExitCode}}' 2>/dev/null || echo "-1")
+
+        if [[ "$RUNNING" != "true" ]]; then
+          echo "::error::Container exited during 15s stability window (ExitCode=$EXIT_CODE)."
+          echo "--- Container Logs ---"
+          docker logs "$CONTAINER_NAME" 2>&1 || true
+          docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+          echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+        # --- Health probe ---
+        HEALTH_OK=false
+        for i in $(seq 1 5); do
+          if curl -sf http://localhost:18080/healthz > /dev/null 2>&1; then
+            HEALTH_OK=true
+            break
+          fi
+          sleep 2
+        done
+
+        docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+
+        if [[ "$HEALTH_OK" != "true" ]]; then
+          echo "::error::/healthz probe failed after container was running."
+          echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+        echo "Smoke test PASSED — build + runtime + health probe verified."
+        echo "smoke_passed=true" >> "$GITHUB_OUTPUT"
+        cp "$PATCHED" "${{ inputs.dockerfile }}"
+
     # ==================================================================
-    # 5. KIND VALIDATION — Ephemeral cluster test (@SRE)
+    # 6. KIND VALIDATION — Ephemeral cluster test (@SRE)
     # ==================================================================
     - name: Set up KinD cluster
       if: steps.smoke-test.outputs.smoke_passed == 'true' && inputs.kind-enabled == 'true'
@@ -300,13 +393,15 @@ runs:
       id: kind-validate
       if: steps.smoke-test.outputs.smoke_passed == 'true' && inputs.kind-enabled == 'true'
       shell: bash
+      working-directory: ${{ github.workspace }}
       run: |
-        kind load docker-image "guardian-scan:patched" --name guardian-test
+        PATCHED_TAG="guardian-scan:patched"
+        docker tag "guardian-scan:smoke-test" "$PATCHED_TAG"
+        kind load docker-image "$PATCHED_TAG" --name guardian-test
 
         # Dynamic image tag swap in manifests
         find ${{ inputs.k8s-manifests }} -name '*.yaml' -o -name '*.yml' | while read f; do
-          sed -i 's|image:.*guardian.*|image: guardian-scan:patched|g' "$f" || true
-          # Force KinD to use the local image, never pull from a registry
+          sed -i "s|image:.*guardian.*|image: $PATCHED_TAG|g" "$f" || true
           sed -i 's|imagePullPolicy:.*|imagePullPolicy: Never|g' "$f" || true
         done
 
@@ -318,26 +413,57 @@ runs:
         else
           echo "validation_passed=false" >> "$GITHUB_OUTPUT"
           echo "::error::KinD validation FAILED — deployment did not reach Ready state"
-          echo "--- Pod Status ---"
-          kubectl get pods -n default -o wide
-          echo "--- Pod Descriptions ---"
-          kubectl describe pods -n default
-          echo "--- Recent Events ---"
-          kubectl get events -n default --sort-by='.lastTimestamp' | tail -30
+
+          # --- Collect full diagnostics ---
+          DIAG_DIR="${{ github.workspace }}/kind-diagnostics"
+          mkdir -p "$DIAG_DIR"
+          kubectl get pods -A -o wide > "$DIAG_DIR/all-pods.txt" 2>&1 || true
+          kubectl describe pods -n default > "$DIAG_DIR/pod-describe.txt" 2>&1 || true
+          kubectl get events -n default --sort-by='.lastTimestamp' > "$DIAG_DIR/events.txt" 2>&1 || true
+          kubectl get deployments -n default -o wide > "$DIAG_DIR/deployments.txt" 2>&1 || true
+          kubectl get replicasets -n default -o wide > "$DIAG_DIR/replicasets.txt" 2>&1 || true
+          for pod in $(kubectl get pods -n default -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+            kubectl logs "$pod" -n default > "$DIAG_DIR/logs-${pod}.txt" 2>&1 || true
+            kubectl logs "$pod" -n default --previous > "$DIAG_DIR/logs-prev-${pod}.txt" 2>&1 || true
+          done
           exit 1
         fi
 
     # ==================================================================
-    # 6. ARTIFACTS — Upload compliance evidence
+    # 7. ARTIFACTS — Upload compliance evidence
     # ==================================================================
+    - name: Verify and upload scan artifacts
+      if: always()
+      shell: bash
+      run: |
+        echo "=== Artifact Verification ==="
+        for f in "${{ github.workspace }}/trivy-results.json" \
+                 "${{ github.workspace }}/patch_audit.log" \
+                 "${{ github.workspace }}/Dockerfile.patched"; do
+          if [[ -f "$f" ]]; then
+            echo "  ✓ Found: $f ($(wc -c < "$f") bytes)"
+          else
+            echo "  ✗ Missing: $f"
+          fi
+        done
+
     - name: Upload scan and audit artifacts
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: supply-chain-guardian-artifacts
         path: |
-          trivy-results.json
-          patch_audit.log
-          Dockerfile.patched
+          ${{ github.workspace }}/trivy-results.json
+          ${{ github.workspace }}/patch_audit.log
+          ${{ github.workspace }}/Dockerfile.patched
         retention-days: 90
         if-no-files-found: warn
+
+    - name: Upload KinD diagnostics (on failure)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: kind-diagnostics
+        path: ${{ github.workspace }}/kind-diagnostics/
+        retention-days: 90
+        if-no-files-found: ignore

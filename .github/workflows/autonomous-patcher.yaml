@@ -1,8 +1,5 @@
 name: Autonomous Supply Chain Patcher
 
-# ---------------------------------------------------------------------------
-# Triggers
-# ---------------------------------------------------------------------------
 on:
   push:
     branches: [main]
@@ -11,7 +8,6 @@ on:
       - "src/**"
       - ".github/workflows/autonomous-patcher.yaml"
   schedule:
-    # Nightly at 02:00 UTC — catches newly published CVEs against unchanged images
     - cron: "0 2 * * *"
   workflow_dispatch:
     inputs:
@@ -20,17 +16,11 @@ on:
         required: false
         default: "false"
 
-# ---------------------------------------------------------------------------
-# Permissions — least-privilege per job
-# ---------------------------------------------------------------------------
 permissions:
-  contents: write        # Required for peter-evans/create-pull-request
-  pull-requests: write   # Required to open/update PRs
-  issues: write          # Required for escalation issue filing
+  contents: write
+  pull-requests: write
+  issues: write
 
-# ---------------------------------------------------------------------------
-# Global defaults
-# ---------------------------------------------------------------------------
 env:
   OLLAMA_MODEL: "llama3.2:1b"
   APP_IMAGE: "guardian-demo"
@@ -43,10 +33,9 @@ env:
   KUBECTL_VERSION: "v1.30.0"
 
 jobs:
-  # ==========================================================================
+  # ========================================================================
   # JOB 1 — SCAN (@SecOps)
-  # Purpose: Run Trivy and surface CRITICAL/HIGH CVEs as a structured artifact.
-  # ==========================================================================
+  # ========================================================================
   scan:
     name: "@SecOps — Vulnerability Scan"
     runs-on: ubuntu-latest
@@ -71,26 +60,23 @@ jobs:
           output: "trivy-results.json"
           severity: "CRITICAL,HIGH"
           ignore-unfixed: true
-          exit-code: "0"   # Don't fail here; let the check step decide
+          exit-code: "0"
         env:
           TRIVY_CACHE_DIR: /tmp/trivy-cache
 
       - name: Check for actionable CVEs
         id: check
         run: |
-          # Count CRITICAL/HIGH CVEs that have a fixed version available.
           CVE_COUNT=$(python3 - <<'EOF'
           import json, sys
           try:
               data = json.load(open("trivy-results.json"))
-          except (FileNotFoundError, json.JSONDecodeError) as e:
-              print(f"0", end="")
-              sys.exit(0)
+          except (FileNotFoundError, json.JSONDecodeError):
+              print("0", end=""); sys.exit(0)
           count = sum(
               1 for r in data.get("Results", [])
               for v in (r.get("Vulnerabilities") or [])
-              if v.get("Severity") in ("CRITICAL", "HIGH")
-              and v.get("FixedVersion", "")
+              if v.get("Severity") in ("CRITICAL", "HIGH") and v.get("FixedVersion", "")
           )
           print(count, end="")
           EOF
@@ -103,15 +89,15 @@ jobs:
           fi
 
       - name: Upload Trivy results artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: trivy-results
           path: trivy-results.json
           retention-days: 90
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Check CVSS ≥ 9.0 escalation gate
-        # Any CVE with CVSS ≥ 9.0 requires human review — pipeline pauses here.
         run: |
           CRITICAL_HIGH=$(python3 - <<'EOF'
           import json, sys
@@ -127,14 +113,13 @@ jobs:
           EOF
           )
           if [[ -n "$CRITICAL_HIGH" ]]; then
-            echo "::warning::CVSS ≥ 9.0 CVE detected — human review required before auto-merge:"
+            echo "::warning::CVSS ≥ 9.0 CVE detected — human review required:"
             echo "$CRITICAL_HIGH"
           fi
 
-  # ==========================================================================
+  # ========================================================================
   # JOB 2 — REMEDIATE (@AIPatcher)
-  # Purpose: Install Ollama, run LLM patching engine, output patched Dockerfile.
-  # ==========================================================================
+  # ========================================================================
   remediate:
     name: "@AIPatcher — AI Remediation"
     runs-on: ubuntu-latest
@@ -160,35 +145,22 @@ jobs:
           name: trivy-results
           path: .
 
-      # -----------------------------------------------------------------------
-      # Ollama: Install → Serve (background) → Health probe → Pull model
-      # This sequence ensures the model server is fully listening before
-      # the patching script makes any API calls.
-      # -----------------------------------------------------------------------
       - name: Install Ollama
         run: curl -fsSL https://ollama.com/install.sh | sh
 
       - name: Start Ollama server (background)
         run: |
           ollama serve &
-          echo "Waiting for Ollama server to be responsive..."
+          echo "Waiting for Ollama server..."
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:11434 > /dev/null 2>&1; then
-              echo "Ollama ready after ${i}s."
-              break
-            fi
+            curl -sf http://localhost:11434 > /dev/null 2>&1 && echo "Ollama ready after ${i}s." && break
             sleep 1
           done
-          # Hard fail if server never came up
           curl -sf http://localhost:11434 || { echo "Ollama failed to start."; exit 1; }
 
-      - name: Pull model — llama3.2:1b (Q4_K_M, ~700MB)
-        # Explicitly pulling the default 4-bit quantized tag to cap memory
-        # consumption under 1GB, leaving headroom for KinD + Docker builds.
+      - name: Pull model
         run: |
-          echo "Pulling ${{ env.OLLAMA_MODEL }}..."
           ollama pull "${{ env.OLLAMA_MODEL }}"
-          echo "Model pull complete."
           ollama list
 
       - name: Run AI Patching Engine
@@ -200,50 +172,151 @@ jobs:
           PATCHED_DOCKERFILE_PATH: "Dockerfile.patched"
           AUDIT_LOG_PATH: "patch_audit.log"
         run: |
-          echo "Invoking remediate_cve.py (side-by-side mode)..."
           python scripts/remediate_cve.py
-          echo "Patching engine completed. Output: Dockerfile.patched"
-          echo "Original Dockerfile is PRESERVED."
+          echo "Patching engine completed."
 
-      # -----------------------------------------------------------------------
-      # SMOKE TEST GATE — Build the patched Dockerfile BEFORE uploading.
-      # This catches hallucinated syntax (CREATEGROUP, ADDuser, etc.) that
-      # passes primitive validation but fails Docker's parser.
-      # If this fails, the original Dockerfile is untouched and no artifact
-      # containing garbage is ever uploaded.
-      # -----------------------------------------------------------------------
-      - name: Smoke test — Docker build with patched Dockerfile
-        id: smoke_test
+      # -------------------------------------------------------------------
+      # DOCKERFILE INTEGRITY GATE — reject patches missing critical instructions
+      # -------------------------------------------------------------------
+      - name: Dockerfile integrity gate
+        id: integrity_gate
         run: |
-          echo "Running docker build smoke test against Dockerfile.patched..."
+          echo "Validating required instructions in Dockerfile.patched..."
+          MISSING=""
+          for INSTR in FROM WORKDIR COPY USER EXPOSE HEALTHCHECK CMD; do
+            if ! grep -qiE "^[[:space:]]*${INSTR}[[:space:]]" Dockerfile.patched; then
+              echo "::error::Missing required Dockerfile instruction: $INSTR"
+              MISSING="$MISSING $INSTR"
+            fi
+          done
+          if [[ -n "$MISSING" ]]; then
+            echo "::error::Dockerfile integrity FAILED. Missing:$MISSING"
+            cat Dockerfile.patched
+            exit 1
+          fi
+          echo "integrity_passed=true" >> "$GITHUB_OUTPUT"
+          echo "Dockerfile integrity gate PASSED."
+
+      # -------------------------------------------------------------------
+      # DOCKER BUILD GATE
+      # -------------------------------------------------------------------
+      - name: Docker build gate
+        id: build_gate
+        run: |
           if docker build -f Dockerfile.patched -t "${{ env.APP_IMAGE }}:smoke-test" .; then
-            echo "SMOKE TEST PASSED — Dockerfile.patched compiles successfully."
-            echo "smoke_passed=true" >> "$GITHUB_OUTPUT"
+            echo "build_passed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::error::SMOKE TEST FAILED — Dockerfile.patched contains syntax errors."
-            echo "::error::The LLM likely hallucinated invalid Docker instructions."
-            echo "::error::Original Dockerfile is preserved. No artifact will be uploaded."
-            echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
-            echo "Dumping patched Dockerfile for audit:"
+            echo "::error::Docker build FAILED for Dockerfile.patched"
             cat Dockerfile.patched
             exit 1
           fi
 
-      - name: Promote patched Dockerfile (only after smoke test passes)
-        if: steps.smoke_test.outputs.smoke_passed == 'true'
+      # -------------------------------------------------------------------
+      # DOCKER INSPECT GATE — verify CMD and WorkingDir exist in image
+      # -------------------------------------------------------------------
+      - name: Docker inspect metadata gate
         run: |
-          echo "Smoke test passed. Promoting Dockerfile.patched -> Dockerfile"
+          IMG="${{ env.APP_IMAGE }}:smoke-test"
+          IMG_CMD=$(docker inspect "$IMG" --format='{{json .Config.Cmd}}')
+          IMG_WORKDIR=$(docker inspect "$IMG" --format='{{json .Config.WorkingDir}}')
+          echo "CMD: $IMG_CMD"
+          echo "WorkingDir: $IMG_WORKDIR"
+          if [[ "$IMG_CMD" == "null" || "$IMG_CMD" == "[]" || -z "$IMG_CMD" ]]; then
+            echo "::error::Image has no CMD. Container will exit immediately."
+            exit 1
+          fi
+          if [[ "$IMG_WORKDIR" == '""' || -z "$IMG_WORKDIR" ]]; then
+            echo "::error::Image has no WorkingDir."
+            exit 1
+          fi
+          echo "Docker inspect gate PASSED."
+
+      # -------------------------------------------------------------------
+      # RUNTIME VALIDATION GATE — container must stay alive 15s + /healthz
+      # -------------------------------------------------------------------
+      - name: Runtime validation gate
+        id: runtime_gate
+        run: |
+          IMG="${{ env.APP_IMAGE }}:smoke-test"
+          CTR="guardian-runtime-check-$$"
+
+          echo "Starting container for runtime validation..."
+          docker run -d --name "$CTR" -p 18080:8080 "$IMG"
+          echo "Waiting 15 seconds for stability..."
+          sleep 15
+
+          RUNNING=$(docker inspect "$CTR" --format='{{.State.Running}}' 2>/dev/null || echo "false")
+          EXIT_CODE=$(docker inspect "$CTR" --format='{{.State.ExitCode}}' 2>/dev/null || echo "-1")
+
+          if [[ "$RUNNING" != "true" ]]; then
+            echo "::error::Container exited during 15s stability window (ExitCode=$EXIT_CODE)."
+            docker logs "$CTR" 2>&1 || true
+            docker rm -f "$CTR" 2>/dev/null || true
+            exit 1
+          fi
+
+          # Health probe
+          HEALTH_OK=false
+          for i in $(seq 1 5); do
+            if curl -sf http://localhost:18080/healthz > /dev/null 2>&1; then
+              HEALTH_OK=true; break
+            fi
+            sleep 2
+          done
+
+          docker logs "$CTR" > runtime-smoke-logs.txt 2>&1 || true
+          docker rm -f "$CTR" 2>/dev/null || true
+
+          if [[ "$HEALTH_OK" != "true" ]]; then
+            echo "::error::/healthz probe failed."
+            cat runtime-smoke-logs.txt
+            exit 1
+          fi
+
+          echo "runtime_passed=true" >> "$GITHUB_OUTPUT"
+          echo "Runtime validation PASSED — container stable 15s + /healthz OK."
+
+      # -------------------------------------------------------------------
+      # RUNTIME REGRESSION GATE — CMD/ENTRYPOINT must not change unexpectedly
+      # -------------------------------------------------------------------
+      - name: Runtime regression gate
+        run: |
+          echo "Building original image for comparison..."
+          docker build -t "${{ env.APP_IMAGE }}:original" .
+
+          ORIG_CMD=$(docker inspect "${{ env.APP_IMAGE }}:original" --format='{{json .Config.Cmd}}')
+          ORIG_EP=$(docker inspect "${{ env.APP_IMAGE }}:original" --format='{{json .Config.Entrypoint}}')
+          PATCH_CMD=$(docker inspect "${{ env.APP_IMAGE }}:smoke-test" --format='{{json .Config.Cmd}}')
+          PATCH_EP=$(docker inspect "${{ env.APP_IMAGE }}:smoke-test" --format='{{json .Config.Entrypoint}}')
+
+          echo "Original CMD=$ORIG_CMD  ENTRYPOINT=$ORIG_EP"
+          echo "Patched  CMD=$PATCH_CMD  ENTRYPOINT=$PATCH_EP"
+
+          if [[ "$ORIG_CMD" != "$PATCH_CMD" ]]; then
+            echo "::error::CMD changed from $ORIG_CMD to $PATCH_CMD"
+            exit 1
+          fi
+          if [[ "$ORIG_EP" != "$PATCH_EP" ]]; then
+            echo "::error::ENTRYPOINT changed from $ORIG_EP to $PATCH_EP"
+            exit 1
+          fi
+          echo "Runtime regression gate PASSED — CMD and ENTRYPOINT unchanged."
+
+      # -------------------------------------------------------------------
+      # PROMOTE
+      # -------------------------------------------------------------------
+      - name: Promote patched Dockerfile
+        run: |
           cp Dockerfile.patched Dockerfile
-          echo "Promotion complete. Diff:"
+          echo "Dockerfile promoted."
           git diff --stat Dockerfile || true
 
       - name: Verify Dockerfile was modified
-        if: steps.smoke_test.outputs.smoke_passed == 'true'
         run: |
           if git diff --quiet Dockerfile; then
-            echo "::warning::Dockerfile was not changed by the patching engine. CVE may still be present."
+            echo "::warning::Dockerfile was not changed by patching engine."
           else
-            echo "Dockerfile has been modified by the AI patcher:"
+            echo "Dockerfile modified:"
             git diff --stat Dockerfile
           fi
 
@@ -252,12 +325,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: patch-audit-log
-          path: patch_audit.log
+          path: |
+            patch_audit.log
+            runtime-smoke-logs.txt
           retention-days: 90
           if-no-files-found: warn
 
-      - name: Upload patched Dockerfile (only if smoke test passed)
-        if: steps.smoke_test.outputs.smoke_passed == 'true'
+      - name: Upload patched Dockerfile
         uses: actions/upload-artifact@v4
         with:
           name: patched-dockerfile
@@ -265,8 +339,8 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-      - name: Upload rejected patch for forensic audit (smoke test failed)
-        if: steps.smoke_test.outputs.smoke_passed == 'false'
+      - name: Upload rejected patch for forensic audit
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: rejected-patch-forensic
@@ -288,27 +362,30 @@ jobs:
                 `## AI Patching Engine Failure`,
                 ``,
                 `The \`remediate\` job failed. Possible causes:`,
-                `- LLM failed after 3 retries (connection/timeout error)`,
-                `- LLM hallucinated invalid Docker syntax (caught by instruction whitelist)`,
-                `- Patched Dockerfile failed \`docker build\` smoke test (compilation error)`,
+                `- LLM failed after 3 retries`,
+                `- Dockerfile integrity gate rejected missing instructions`,
+                `- Docker build failed on patched Dockerfile`,
+                `- Docker inspect found missing CMD or WorkingDir`,
+                `- Container exited during 15s runtime stability check`,
+                `- /healthz health probe failed`,
+                `- CMD or ENTRYPOINT changed unexpectedly (regression)`,
                 ``,
                 `**Workflow Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
                 ``,
                 `### Required Actions`,
-                `1. Review the \`patch-audit-log\` artifact for the raw LLM prompt and response.`,
-                `2. If present, review the \`rejected-patch-forensic\` artifact for the hallucinated Dockerfile.`,
-                `3. Manually patch the Dockerfile to remediate the CVEs in \`trivy-results\` artifact.`,
-                `4. Close this issue once the CVEs are resolved.`,
+                `1. Review \`patch-audit-log\` artifact for LLM prompt/response.`,
+                `2. Review \`rejected-patch-forensic\` artifact if present.`,
+                `3. Manually patch the Dockerfile.`,
+                `4. Close this issue once resolved.`,
                 ``,
                 `cc: @${context.repo.owner}`,
               ].join('\n'),
               labels: ['security', 'escalation', 'ai-patcher-failure'],
             });
 
-  # ==========================================================================
+  # ========================================================================
   # JOB 3 — VALIDATE (@SRE)
-  # Purpose: Spin up KinD, deploy the patched image, run health gates.
-  # ==========================================================================
+  # ========================================================================
   validate:
     name: "@SRE — KinD Cluster Validation"
     runs-on: ubuntu-latest
@@ -341,14 +418,9 @@ jobs:
 
       - name: Load patched image into KinD
         run: |
-          echo "Loading ${{ env.PATCHED_TAG }} into KinD cluster..."
           kind load docker-image "${{ env.PATCHED_TAG }}" --name guardian-test
-          echo "Image loaded successfully."
 
       - name: Patch deployment manifest with new image tag
-        # Dynamic tag swap: replaces any guardian-demo:* image ref with the
-        # exact patched tag so KinD uses the correct local image.
-        # Also forces imagePullPolicy: Never so KinD doesn't attempt a registry pull.
         run: |
           sed -i \
             "s|image: ${{ env.APP_IMAGE }}:.*|image: ${{ env.PATCHED_TAG }}|g" \
@@ -356,31 +428,22 @@ jobs:
           sed -i \
             's|imagePullPolicy:.*|imagePullPolicy: Never|g' \
             k8s/deployment.yaml
-          echo "Image tag in deployment.yaml updated to: ${{ env.PATCHED_TAG }}"
-          echo "--- Final deployment.yaml (image lines) ---"
           grep -E "image:|imagePullPolicy:" k8s/deployment.yaml
 
       - name: Deploy to KinD cluster
         run: |
           kubectl apply -f k8s/
-          echo "Manifests applied. Pods:"
           kubectl get pods -A
 
       - name: Wait for deployment readiness
         run: |
-          echo "Waiting for deployment to become available (timeout: 120s)..."
+          echo "Waiting for deployment (timeout: 120s)..."
           if ! kubectl wait \
             --for=condition=available \
             --timeout=120s \
             deployment/${{ env.APP_NAME }} \
             -n ${{ env.NAMESPACE }}; then
             echo "::error::Deployment did not become available within 120s"
-            echo "--- Pod Status ---"
-            kubectl get pods -n ${{ env.NAMESPACE }} -o wide
-            echo "--- Pod Descriptions ---"
-            kubectl describe pods -n ${{ env.NAMESPACE }} -l app=${{ env.APP_NAME }}
-            echo "--- Recent Events ---"
-            kubectl get events -n ${{ env.NAMESPACE }} --sort-by='.lastTimestamp' | tail -30
             exit 1
           fi
 
@@ -394,12 +457,30 @@ jobs:
           chmod +x tests/integration/test_kind_deploy.sh
           bash tests/integration/test_kind_deploy.sh
 
+      - name: Collect KinD diagnostics
+        if: always()
+        run: |
+          DIAG="kind-diagnostics"
+          mkdir -p "$DIAG"
+          kubectl get pods -A -o wide > "$DIAG/all-pods.txt" 2>&1 || true
+          kubectl describe pods -n ${{ env.NAMESPACE }} > "$DIAG/pod-describe.txt" 2>&1 || true
+          kubectl get events -n ${{ env.NAMESPACE }} --sort-by='.lastTimestamp' > "$DIAG/events.txt" 2>&1 || true
+          kubectl get deployments -n ${{ env.NAMESPACE }} -o wide > "$DIAG/deployments.txt" 2>&1 || true
+          kubectl get replicasets -n ${{ env.NAMESPACE }} -o wide > "$DIAG/replicasets.txt" 2>&1 || true
+          for pod in $(kubectl get pods -n ${{ env.NAMESPACE }} -l app=${{ env.APP_NAME }} \
+            -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+            kubectl logs "$pod" -n ${{ env.NAMESPACE }} > "$DIAG/logs-${pod}.txt" 2>&1 || true
+            kubectl logs "$pod" -n ${{ env.NAMESPACE }} --previous > "$DIAG/logs-prev-${pod}.txt" 2>&1 || true
+          done
+
       - name: Upload KinD test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kind-test-report
-          path: kind-test-report.txt
+          path: |
+            kind-test-report.txt
+            kind-diagnostics/
           retention-days: 90
           if-no-files-found: warn
 
@@ -416,18 +497,19 @@ jobs:
               body: [
                 `## KinD Integration Test Failure`,
                 ``,
-                `The patched image \`${process.env.PATCHED_TAG}\` failed to reach \`Available\` state within 90 seconds in the ephemeral KinD cluster.`,
+                `The patched image \`${process.env.PATCHED_TAG}\` failed validation in KinD.`,
                 ``,
                 `**Workflow Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
                 ``,
-                `### Possible Causes`,
-                `- The AI patch introduced an incompatible base image change.`,
-                `- A dependency in \`requirements.txt\` is not available for the new OS/arch.`,
-                `- The new image failed a readiness probe.`,
+                `### Diagnostics Available`,
+                `Download the \`kind-test-report\` artifact for:`,
+                `- Pod status, descriptions, and logs`,
+                `- Previous container logs`,
+                `- Cluster events and replica set status`,
                 ``,
                 `### Required Actions`,
-                `1. Download the \`kind-test-report\` artifact for pod logs and events.`,
-                `2. Manually verify the Dockerfile change proposed by the AI patcher.`,
+                `1. Download \`kind-test-report\` artifact for full diagnostics.`,
+                `2. Verify the Dockerfile change proposed by the AI patcher.`,
                 `3. Apply a corrected patch and close this issue.`,
                 ``,
                 `cc: @${context.repo.owner}`,
@@ -435,10 +517,9 @@ jobs:
               labels: ['security', 'escalation', 'sre-failure'],
             });
 
-  # ==========================================================================
+  # ========================================================================
   # JOB 4 — VERIFY (@SecOps + @SRE)
-  # Purpose: Re-scan the patched image to confirm zero CRITICAL CVEs remain.
-  # ==========================================================================
+  # ========================================================================
   verify:
     name: "@SecOps — Post-Patch Re-Scan Verification"
     runs-on: ubuntu-latest
@@ -454,20 +535,17 @@ jobs:
           path: .
 
       - name: Rebuild patched image for re-scan
-        run: |
-          docker build \
-            --tag "${{ env.PATCHED_TAG }}" \
-            .
+        run: docker build --tag "${{ env.PATCHED_TAG }}" .
 
       - name: Re-scan patched image with Trivy
-        uses: aquasecurity/trivy-action@v0.29.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: "${{ env.PATCHED_TAG }}"
           format: "json"
           output: "trivy-results-post-patch.json"
           severity: "CRITICAL,HIGH"
           ignore-unfixed: true
-          exit-code: "1"    # HARD FAIL if CVEs still present after patching
+          exit-code: "1"
         env:
           TRIVY_CACHE_DIR: /tmp/trivy-cache
 
@@ -487,8 +565,7 @@ jobs:
           try:
               data = json.load(open("trivy-results-post-patch.json"))
           except Exception:
-              print("0", end="")
-              sys.exit(0)
+              print("0", end=""); sys.exit(0)
           count = sum(
               1 for r in data.get("Results", [])
               for v in (r.get("Vulnerabilities") or [])
@@ -497,18 +574,16 @@ jobs:
           print(count, end="")
           EOF
           )
-          echo "Remaining CRITICAL CVEs after patch: $REMAINING"
+          echo "Remaining CRITICAL CVEs: $REMAINING"
           if [[ "$REMAINING" -gt 0 ]]; then
-            echo "::error::Post-patch re-scan found $REMAINING remaining CRITICAL CVEs. PR will not be opened."
+            echo "::error::Post-patch re-scan found $REMAINING remaining CRITICAL CVEs."
             exit 1
           fi
           echo "Verification PASSED — zero CRITICAL CVEs remain."
 
-  # ==========================================================================
+  # ========================================================================
   # JOB 5 — PULL REQUEST
-  # Purpose: Open (or update) the remediation PR with full evidence.
-  # Idempotent: updates existing branch instead of creating duplicates.
-  # ==========================================================================
+  # ========================================================================
   pull-request:
     name: "Open Remediation Pull Request"
     runs-on: ubuntu-latest
@@ -517,7 +592,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # Full history needed for peter-evans/create-pull-request
           fetch-depth: 0
 
       - name: Download patched Dockerfile
@@ -553,28 +627,36 @@ jobs:
           ### Evidence Chain
 
           All artifacts are attached to the workflow run:
-          - 📋 \`trivy-results\` — Original vulnerability report that triggered this patch
-          - 🤖 \`patch-audit-log\` — Full LLM prompt and raw response for audit review
-          - 🧪 \`kind-test-report\` — KinD cluster deployment validation evidence
-          - ✅ \`trivy-results-post-patch\` — Confirms zero CRITICAL CVEs remain after patch
+          - 📋 \`trivy-results\` — Original vulnerability report
+          - 🤖 \`patch-audit-log\` — Full LLM prompt and response audit trail
+          - 🧪 \`kind-test-report\` — KinD cluster validation evidence + diagnostics
+          - ✅ \`trivy-results-post-patch\` — Confirms zero CRITICAL CVEs remain
+
+          ### Validation Gates Passed
+          - ✅ Dockerfile integrity (FROM, WORKDIR, COPY, USER, EXPOSE, HEALTHCHECK, CMD)
+          - ✅ Docker build compilation
+          - ✅ Docker inspect (CMD + WorkingDir non-empty)
+          - ✅ Runtime stability (container alive ≥15s)
+          - ✅ Health probe (/healthz HTTP 200)
+          - ✅ Runtime regression (CMD/ENTRYPOINT unchanged)
+          - ✅ KinD cluster deployment
+          - ✅ Post-patch Trivy re-scan
 
           ### Review Checklist (for human approver)
 
           - [ ] Confirm base image change is compatible with application dependencies
-          - [ ] Verify no application behaviour changes are introduced by the base OS upgrade
+          - [ ] Verify no application behaviour changes are introduced
           - [ ] Review \`patch_audit.log\` to inspect the exact LLM prompt and response
           - [ ] Merge only after all checks above are complete
 
           > **@SecOps @SRE** — Please review before merging.
           EOF
-          echo "PR body written."
 
       - name: Create or update remediation PR
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: ${{ env.REMEDIATION_BRANCH }}
-          # Idempotent: same branch name means existing PR is updated, not duplicated
           base: main
           title: "[SEC] Automated CVE Remediation — Supply Chain Guardian"
           body-path: pr-body.md
@@ -583,6 +665,7 @@ jobs:
 
             AI-generated Dockerfile patch validated in ephemeral KinD cluster.
             Zero CRITICAL CVEs confirmed by post-patch Trivy re-scan.
+            Runtime validation: 15s stability + /healthz + CMD/ENTRYPOINT regression check.
             See patch_audit.log artifact for full LLM interaction trail.
           labels: |
             security
