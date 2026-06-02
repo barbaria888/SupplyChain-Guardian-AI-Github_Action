@@ -45,11 +45,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Preflight — validate Dockerfile and build context
+        run: |
+          chmod +x scripts/preflight_docker.sh
+          bash scripts/preflight_docker.sh Dockerfile .
+
       - name: Build baseline image for scanning
         run: |
           docker build \
             --tag "${{ env.APP_IMAGE }}:baseline" \
             --label "guardian.scan=baseline" \
+            --file Dockerfile \
             .
 
       - name: Run Trivy — Full image scan
@@ -95,7 +101,7 @@ jobs:
           name: trivy-results
           path: trivy-results.json
           retention-days: 90
-          if-no-files-found: warn
+          if-no-files-found: ignore
 
       - name: Check CVSS ≥ 9.0 escalation gate
         run: |
@@ -200,6 +206,11 @@ jobs:
       # -------------------------------------------------------------------
       # DOCKER BUILD GATE
       # -------------------------------------------------------------------
+      - name: Preflight — validate patched Dockerfile
+        run: |
+          chmod +x scripts/preflight_docker.sh
+          bash scripts/preflight_docker.sh Dockerfile.patched .
+
       - name: Docker build gate
         id: build_gate
         run: |
@@ -261,7 +272,7 @@ jobs:
             patch_audit.log
             runtime-smoke-logs.txt
           retention-days: 90
-          if-no-files-found: warn
+          if-no-files-found: ignore
 
       - name: Upload patched Dockerfile
         uses: actions/upload-artifact@v4
@@ -287,7 +298,7 @@ jobs:
           name: rejected-patch-forensic
           path: Dockerfile.patched
           retention-days: 90
-          if-no-files-found: warn
+          if-no-files-found: ignore
 
       - name: File escalation Issue on remediation failure
         if: failure()
@@ -341,12 +352,18 @@ jobs:
           name: patched-dockerfile
           path: .
 
+      - name: Preflight — validate patched Dockerfile for KinD build
+        run: |
+          chmod +x scripts/preflight_docker.sh
+          bash scripts/preflight_docker.sh Dockerfile .
+
       - name: Build patched Docker image
         run: |
           docker build \
             --tag "${{ env.PATCHED_TAG }}" \
             --label "guardian.scan=patched" \
             --label "guardian.run-id=${{ github.run_id }}" \
+            --file Dockerfile \
             .
 
       - name: Set up KinD ${{ env.KIND_VERSION }}
@@ -423,7 +440,7 @@ jobs:
             kind-test-report.txt
             kind-diagnostics/
           retention-days: 90
-          if-no-files-found: warn
+          if-no-files-found: ignore
 
       - name: File escalation Issue on validation failure
         if: failure()
@@ -475,8 +492,13 @@ jobs:
           name: patched-dockerfile
           path: .
 
+      - name: Preflight — validate Dockerfile for re-scan build
+        run: |
+          chmod +x scripts/preflight_docker.sh
+          bash scripts/preflight_docker.sh Dockerfile .
+
       - name: Rebuild patched image for re-scan
-        run: docker build --tag "${{ env.PATCHED_TAG }}" .
+        run: docker build --tag "${{ env.PATCHED_TAG }}" --file Dockerfile .
 
       - name: Re-scan patched image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
@@ -497,7 +519,7 @@ jobs:
           name: trivy-results-post-patch
           path: trivy-results-post-patch.json
           retention-days: 90
-          if-no-files-found: warn
+          if-no-files-found: ignore
 
       - name: Confirm zero CRITICAL CVEs remain
         run: |

@@ -168,17 +168,58 @@ runs:
       run: pip install -r "${{ github.action_path }}/scripts/requirements.txt"
 
     # ==================================================================
+    # 1b. DIAGNOSTICS — Log workspace and build context for debugging
+    # ==================================================================
+    - name: Diagnostic — log workspace and build context
+      shell: bash
+      run: |
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  Supply Chain Guardian — Diagnostic Info"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  github.workspace  : ${{ github.workspace }}"
+        echo "  github.action_path: ${{ github.action_path }}"
+        echo "  Dockerfile input  : ${{ inputs.dockerfile }}"
+        echo "  Working directory : $(pwd)"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo ""
+        echo "  Workspace contents (depth 2):"
+        if command -v tree &>/dev/null; then
+          tree -L 2 --charset=ascii -I '.git' "${{ github.workspace }}" 2>/dev/null | head -60 || true
+        else
+          find "${{ github.workspace }}" -maxdepth 2 \
+            -not -path '*/.git/*' -not -path '*/.git' \
+            -print 2>/dev/null | sort | head -60 || true
+        fi
+
+    # ==================================================================
     # 2. SCAN — Trivy vulnerability analysis (@SecOps)
     # ==================================================================
+    - name: Preflight — validate Dockerfile and build context
+      if: inputs.image-ref == ''
+      shell: bash
+      run: |
+        DOCKERFILE="${{ github.workspace }}/${{ inputs.dockerfile }}"
+        # If the input is already absolute, use it as-is
+        if [[ "${{ inputs.dockerfile }}" = /* ]]; then
+          DOCKERFILE="${{ inputs.dockerfile }}"
+        fi
+        bash "${{ github.action_path }}/scripts/preflight_docker.sh" \
+          "$DOCKERFILE" \
+          "${{ github.workspace }}"
+
     - name: Build image for scanning (if no image-ref provided)
       if: inputs.image-ref == ''
       shell: bash
       working-directory: ${{ github.workspace }}
       run: |
+        DOCKERFILE="${{ github.workspace }}/${{ inputs.dockerfile }}"
+        if [[ "${{ inputs.dockerfile }}" = /* ]]; then
+          DOCKERFILE="${{ inputs.dockerfile }}"
+        fi
         docker build \
           --tag "guardian-scan:baseline" \
-          --file "${{ inputs.dockerfile }}" \
-          .
+          --file "$DOCKERFILE" \
+          "${{ github.workspace }}"
 
     - name: Run Trivy vulnerability scan
       id: scan
@@ -305,6 +346,14 @@ runs:
     # ==================================================================
     # 5. SMOKE TEST — Docker build + runtime validation
     # ==================================================================
+    - name: Preflight — validate patched Dockerfile before smoke test
+      if: steps.remediate.outputs.patch_applied == 'true'
+      shell: bash
+      run: |
+        bash "${{ github.action_path }}/scripts/preflight_docker.sh" \
+          "${{ github.workspace }}/Dockerfile.patched" \
+          "${{ github.workspace }}"
+
     - name: Smoke test — Docker build with patched Dockerfile
       id: smoke-test
       if: steps.remediate.outputs.patch_applied == 'true'
@@ -315,7 +364,7 @@ runs:
         SMOKE_IMAGE="guardian-scan:smoke-test"
 
         # --- Build gate ---
-        if ! docker build -f "$PATCHED" -t "$SMOKE_IMAGE" .; then
+        if ! docker build -f "$PATCHED" -t "$SMOKE_IMAGE" "${{ github.workspace }}"; then
           echo "::error::Smoke test FAILED — patched Dockerfile has build errors"
           echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
           exit 1
@@ -430,25 +479,33 @@ runs:
         fi
 
     # ==================================================================
-    # 7. ARTIFACTS — Upload compliance evidence
+    # 7. ARTIFACTS — Upload compliance evidence (conditional)
     # ==================================================================
-    - name: Verify and upload scan artifacts
+    - name: Verify artifact availability
+      id: artifact-check
       if: always()
       shell: bash
       run: |
         echo "=== Artifact Verification ==="
+        HAS_ARTIFACTS=false
         for f in "${{ github.workspace }}/trivy-results.json" \
                  "${{ github.workspace }}/patch_audit.log" \
                  "${{ github.workspace }}/Dockerfile.patched"; do
           if [[ -f "$f" ]]; then
-            echo "  ✓ Found: $f ($(wc -c < "$f") bytes)"
+            echo "  ✓ Found: $f ($(wc -c < "$f" | tr -d ' ') bytes)"
+            HAS_ARTIFACTS=true
           else
-            echo "  ✗ Missing: $f"
+            echo "  ✗ Missing: $f (expected — step may not have run)"
           fi
         done
+        echo "has_artifacts=$HAS_ARTIFACTS" >> "$GITHUB_OUTPUT"
+
+        if [[ "$HAS_ARTIFACTS" == "false" ]]; then
+          echo "::notice::No scan artifacts were generated. This usually means the initial Docker build failed. Check the preflight and build steps above for the root cause."
+        fi
 
     - name: Upload scan and audit artifacts
-      if: always()
+      if: always() && steps.artifact-check.outputs.has_artifacts == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: supply-chain-guardian-artifacts
@@ -457,7 +514,7 @@ runs:
           ${{ github.workspace }}/patch_audit.log
           ${{ github.workspace }}/Dockerfile.patched
         retention-days: 90
-        if-no-files-found: warn
+        if-no-files-found: ignore
 
     - name: Upload KinD diagnostics (on failure)
       if: always()
