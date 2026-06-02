@@ -474,12 +474,33 @@ def strip_markdown_fencing(raw: str) -> str:
     return stripped
 
 
+# Patterns that confirm a user account is actually created in a RUN instruction.
+_USER_CREATION_PATTERNS: tuple[str, ...] = (
+    "adduser", "useradd", "addgroup", "groupadd",
+)
+
+
+def _has_instruction(content: str, instruction: str) -> bool:
+    """Return True if any line starts with the given Dockerfile instruction."""
+    pattern = re.compile(rf"^\s*{instruction}\s", re.IGNORECASE | re.MULTILINE)
+    return bool(pattern.search(content))
+
+
 def validate_dockerfile_primitives(content: str) -> None:
     """
     Sanity-check that the LLM output contains the non-negotiable Dockerfile
     primitives. Exits 1 (fatal) if validation fails — never writes a broken file.
+
+    Additionally checks that if USER is declared, a user-creation command
+    (adduser/useradd/addgroup/groupadd) exists in a RUN layer. Without this
+    the container will fail at runtime with:
+      'unable to find user <name>: no matching entries in passwd file'
     """
-    missing_required = [p for p in REQUIRED_DOCKERFILE_PRIMITIVES if p not in content]
+    # --- Required instruction presence ---
+    missing_required = [
+        p for p in REQUIRED_DOCKERFILE_PRIMITIVES
+        if not _has_instruction(content, p)
+    ]
     if missing_required:
         audit.write(
             "validation_failed",
@@ -496,7 +517,8 @@ def validate_dockerfile_primitives(content: str) -> None:
         )
         sys.exit(1)
 
-    has_entrypoint = any(p in content for p in ENTRYPOINT_PRIMITIVES)
+    # --- CMD or ENTRYPOINT ---
+    has_entrypoint = any(_has_instruction(content, p) for p in ENTRYPOINT_PRIMITIVES)
     if not has_entrypoint:
         audit.write(
             "validation_failed",
@@ -510,6 +532,33 @@ def validate_dockerfile_primitives(content: str) -> None:
             "Refusing to write patched Dockerfile. Exiting 1.",
         )
         sys.exit(1)
+
+    # --- USER creation guard ---
+    # If the Dockerfile declares USER, it MUST also have a RUN layer that
+    # creates that user account, otherwise the container fails at startup.
+    if _has_instruction(content, "USER"):
+        has_creation = any(pat in content for pat in _USER_CREATION_PATTERNS)
+        if not has_creation:
+            audit.write(
+                "validation_failed",
+                {
+                    "reason": "user_declared_without_creation",
+                    "detail": (
+                        "USER instruction is present but no user-creation command "
+                        "(adduser/useradd/addgroup/groupadd) was found. "
+                        "Container will fail at runtime."
+                    ),
+                    "content_preview": content[:400],
+                },
+            )
+            log.critical(
+                "Dockerfile validation FAILED — USER declared but no user-creation "
+                "command found (adduser/useradd/addgroup/groupadd). "
+                "The container will crash with 'unable to find user'. "
+                "Refusing to write patched Dockerfile. Exiting 1."
+            )
+            sys.exit(1)
+        log.info("USER creation guard PASSED — user-creation command present.")
 
     log.info("Dockerfile primitive validation PASSED.")
 

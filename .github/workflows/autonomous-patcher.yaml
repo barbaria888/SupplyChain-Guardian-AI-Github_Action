@@ -212,95 +212,27 @@ jobs:
           fi
 
       # -------------------------------------------------------------------
-      # DOCKER INSPECT GATE — verify CMD and WorkingDir exist in image
+      # IMAGE VALIDATION GATES (USER existence, regression, WORKDIR, runtime)
+      # Handled by scripts/validate_image.sh — see that file for gate details.
       # -------------------------------------------------------------------
-      - name: Docker inspect metadata gate
+      - name: Build baseline image for regression comparison
         run: |
-          IMG="${{ env.APP_IMAGE }}:smoke-test"
-          IMG_CMD=$(docker inspect "$IMG" --format='{{json .Config.Cmd}}')
-          IMG_WORKDIR=$(docker inspect "$IMG" --format='{{json .Config.WorkingDir}}')
-          echo "CMD: $IMG_CMD"
-          echo "WorkingDir: $IMG_WORKDIR"
-          if [[ "$IMG_CMD" == "null" || "$IMG_CMD" == "[]" || -z "$IMG_CMD" ]]; then
-            echo "::error::Image has no CMD. Container will exit immediately."
-            exit 1
-          fi
-          if [[ "$IMG_WORKDIR" == '""' || -z "$IMG_WORKDIR" ]]; then
-            echo "::error::Image has no WorkingDir."
-            exit 1
-          fi
-          echo "Docker inspect gate PASSED."
+          echo "Building baseline image from original Dockerfile for regression comparison..."
+          docker build -t "${{ env.APP_IMAGE }}:baseline-check" .
 
-      # -------------------------------------------------------------------
-      # RUNTIME VALIDATION GATE — container must stay alive 15s + /healthz
-      # -------------------------------------------------------------------
-      - name: Runtime validation gate
-        id: runtime_gate
+      - name: Run image validation gates
+        id: validation_gates
+        env:
+          PATCHED_IMAGE: "${{ env.APP_IMAGE }}:smoke-test"
+          BASELINE_IMAGE: "${{ env.APP_IMAGE }}:baseline-check"
+          HEALTHZ_PORT: "18080"
+          HEALTHZ_PATH: "/healthz"
+          STABILITY_SECONDS: "15"
+          AUDIT_LOG: "patch_audit.log"
+          FORENSICS_DIR: "runtime-failure-report"
         run: |
-          IMG="${{ env.APP_IMAGE }}:smoke-test"
-          CTR="guardian-runtime-check-$$"
-
-          echo "Starting container for runtime validation..."
-          docker run -d --name "$CTR" -p 18080:8080 "$IMG"
-          echo "Waiting 15 seconds for stability..."
-          sleep 15
-
-          RUNNING=$(docker inspect "$CTR" --format='{{.State.Running}}' 2>/dev/null || echo "false")
-          EXIT_CODE=$(docker inspect "$CTR" --format='{{.State.ExitCode}}' 2>/dev/null || echo "-1")
-
-          if [[ "$RUNNING" != "true" ]]; then
-            echo "::error::Container exited during 15s stability window (ExitCode=$EXIT_CODE)."
-            docker logs "$CTR" 2>&1 || true
-            docker rm -f "$CTR" 2>/dev/null || true
-            exit 1
-          fi
-
-          # Health probe
-          HEALTH_OK=false
-          for i in $(seq 1 5); do
-            if curl -sf http://localhost:18080/healthz > /dev/null 2>&1; then
-              HEALTH_OK=true; break
-            fi
-            sleep 2
-          done
-
-          docker logs "$CTR" > runtime-smoke-logs.txt 2>&1 || true
-          docker rm -f "$CTR" 2>/dev/null || true
-
-          if [[ "$HEALTH_OK" != "true" ]]; then
-            echo "::error::/healthz probe failed."
-            cat runtime-smoke-logs.txt
-            exit 1
-          fi
-
-          echo "runtime_passed=true" >> "$GITHUB_OUTPUT"
-          echo "Runtime validation PASSED — container stable 15s + /healthz OK."
-
-      # -------------------------------------------------------------------
-      # RUNTIME REGRESSION GATE — CMD/ENTRYPOINT must not change unexpectedly
-      # -------------------------------------------------------------------
-      - name: Runtime regression gate
-        run: |
-          echo "Building original image for comparison..."
-          docker build -t "${{ env.APP_IMAGE }}:original" .
-
-          ORIG_CMD=$(docker inspect "${{ env.APP_IMAGE }}:original" --format='{{json .Config.Cmd}}')
-          ORIG_EP=$(docker inspect "${{ env.APP_IMAGE }}:original" --format='{{json .Config.Entrypoint}}')
-          PATCH_CMD=$(docker inspect "${{ env.APP_IMAGE }}:smoke-test" --format='{{json .Config.Cmd}}')
-          PATCH_EP=$(docker inspect "${{ env.APP_IMAGE }}:smoke-test" --format='{{json .Config.Entrypoint}}')
-
-          echo "Original CMD=$ORIG_CMD  ENTRYPOINT=$ORIG_EP"
-          echo "Patched  CMD=$PATCH_CMD  ENTRYPOINT=$PATCH_EP"
-
-          if [[ "$ORIG_CMD" != "$PATCH_CMD" ]]; then
-            echo "::error::CMD changed from $ORIG_CMD to $PATCH_CMD"
-            exit 1
-          fi
-          if [[ "$ORIG_EP" != "$PATCH_EP" ]]; then
-            echo "::error::ENTRYPOINT changed from $ORIG_EP to $PATCH_EP"
-            exit 1
-          fi
-          echo "Runtime regression gate PASSED — CMD and ENTRYPOINT unchanged."
+          chmod +x scripts/validate_image.sh
+          bash scripts/validate_image.sh
 
       # -------------------------------------------------------------------
       # PROMOTE
@@ -338,6 +270,15 @@ jobs:
           path: Dockerfile
           retention-days: 90
           if-no-files-found: error
+
+      - name: Upload runtime failure forensics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-failure-report
+          path: runtime-failure-report/
+          retention-days: 90
+          if-no-files-found: ignore
 
       - name: Upload rejected patch for forensic audit
         if: failure()
