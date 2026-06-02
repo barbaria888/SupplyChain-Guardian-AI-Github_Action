@@ -22,7 +22,7 @@ permissions:
   issues: write
 
 env:
-  OLLAMA_MODEL: "llama3.2:1b"
+  OLLAMA_MODEL: "qwen3:4b"
   APP_IMAGE: "guardian-demo"
   PATCHED_TAG: "guardian-demo:patched"
   NAMESPACE: "default"
