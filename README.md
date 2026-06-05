@@ -16,6 +16,26 @@
 
 This GitHub Action detects vulnerabilities in your container images, uses an **AI model** to generate a Dockerfile patch, validates the fix inside an ephemeral **KinD cluster**, and opens a **pull request with proof** — all automatically.
 
+<!-- Premium Liquid Glass Gradient -->
+
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=9zQBe_HQFak">
+    <img
+      src="https://capsule-render.vercel.app/api?type=rounded&height=150&text=Watch%20Pipeline%20Walkthrough%20on%20Youtube▶︎&fontSize=44&fontAlignY=43&fontColor=FFFFFF&animation=fadeIn&desc=AI-Powered%20Container%20Security%20Architecture&descAlignY=69&descSize=17&color=0:F8FAFC,10:E0F2FE,24:BAE6FD,40:93C5FD,58:A5B4FC,74:C4B5FD,88:FDE68A,100:FBCFE8"
+      style="
+        border-radius:32px;
+        box-shadow:
+          0 10px 40px rgba(148,163,184,0.18),
+          inset 0 1px 1px rgba(255,255,255,0.55),
+          inset 0 -1px 1px rgba(255,255,255,0.20);
+        border:1px solid rgba(255,255,255,0.32);
+      "
+    />
+  </a>
+</p>
+
+
+
 ```
 Push → Trivy Scan → CVE Found → AI Patches Dockerfile
          → Smoke Test → KinD Validates → Re-scan Confirms → PR Opened
@@ -27,7 +47,7 @@ Push → Trivy Scan → CVE Found → AI Patches Dockerfile
 
 ## ⚡ Quickstart
 
-Add this to `.github/workflows/supply-chain-guardian.yaml`:
+
 
 ```yaml
 name: Supply Chain Guardian
