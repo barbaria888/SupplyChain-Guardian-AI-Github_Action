@@ -40,7 +40,7 @@ API_KEY: str = os.getenv("API_KEY", "")  # Required for gemini/openai providers
 
 OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
-OLLAMA_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", os.getenv("OLLAMA_TIMEOUT", "120")))  # seconds
+LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", os.getenv("OLLAMA_TIMEOUT", "120")))  # seconds
 
 # Gemini provider settings
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
@@ -297,7 +297,7 @@ def _call_ollama(prompt: str, attempt: int) -> str:
     response = requests.post(
         f"{OLLAMA_HOST}/api/generate",
         json=payload,
-        timeout=OLLAMA_TIMEOUT,
+        timeout=LLM_TIMEOUT,
     )
     response.raise_for_status()
     return response.json().get("response", "")
@@ -322,7 +322,7 @@ def _call_gemini(prompt: str, attempt: int) -> str:
         },
     }
     log.info("Calling Gemini (attempt %d/%d) model=%s", attempt, MAX_RETRIES, GEMINI_MODEL)
-    response = requests.post(url, json=payload, timeout=OLLAMA_TIMEOUT)
+    response = requests.post(url, json=payload, timeout=LLM_TIMEOUT)
     response.raise_for_status()
     data = response.json()
     # Gemini response structure: candidates[0].content.parts[0].text
@@ -357,7 +357,7 @@ def _call_openai(prompt: str, attempt: int) -> str:
         "max_tokens": 2048,
     }
     log.info("Calling OpenAI (attempt %d/%d) model=%s", attempt, MAX_RETRIES, OPENAI_MODEL)
-    response = requests.post(OPENAI_ENDPOINT, json=payload, headers=headers, timeout=OLLAMA_TIMEOUT)
+    response = requests.post(OPENAI_ENDPOINT, json=payload, headers=headers, timeout=LLM_TIMEOUT)
     response.raise_for_status()
     data = response.json()
     try:
@@ -403,7 +403,7 @@ def invoke_llm_with_retry(prompt: str) -> str:
         except requests.exceptions.ConnectionError as exc:
             log.error("Connection refused (attempt %d): %s", attempt, exc)
         except requests.exceptions.Timeout:
-            log.error("Request timed out after %ds (attempt %d)", OLLAMA_TIMEOUT, attempt)
+            log.error("Request timed out after %ds (attempt %d)", LLM_TIMEOUT, attempt)
         except requests.exceptions.HTTPError as exc:
             log.error("HTTP error (attempt %d): %s", attempt, exc)
         except (KeyError, IndexError, json.JSONDecodeError) as exc:
