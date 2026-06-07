@@ -24,7 +24,7 @@ permissions:
 env:
   # Dogfooding workflow override: intentionally pinned to NVIDIA Nemotron.
   PROVIDER: "openai"
-  OPENAI_MODEL: "nvidia/nemotron-3-ultra-550b-a55b"
+  OPENAI_MODEL: "google/gemma-4-31b-it"
   OPENAI_ENDPOINT: "https://integrate.api.nvidia.com/v1/chat/completions"
   APP_IMAGE: "guardian-demo"
   PATCHED_TAG: "guardian-demo:patched"
