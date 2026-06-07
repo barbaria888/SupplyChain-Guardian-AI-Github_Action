@@ -22,7 +22,9 @@ permissions:
   issues: write
 
 env:
-  OLLAMA_MODEL: "qwen3:4b"
+  PROVIDER: "openai"
+  OPENAI_MODEL: "nvidia/nemotron-3-ultra-550b-a55b"
+  OPENAI_ENDPOINT: "https://integrate.api.nvidia.com/v1/chat/completions"
   APP_IMAGE: "guardian-demo"
   PATCHED_TAG: "guardian-demo:patched"
   NAMESPACE: "default"
@@ -151,28 +153,13 @@ jobs:
           name: trivy-results
           path: .
 
-      - name: Install Ollama
-        run: curl -fsSL https://ollama.com/install.sh | sh
-
-      - name: Start Ollama server (background)
-        run: |
-          ollama serve &
-          echo "Waiting for Ollama server..."
-          for i in $(seq 1 30); do
-            curl -sf http://localhost:11434 > /dev/null 2>&1 && echo "Ollama ready after ${i}s." && break
-            sleep 1
-          done
-          curl -sf http://localhost:11434 || { echo "Ollama failed to start."; exit 1; }
-
-      - name: Pull model
-        run: |
-          ollama pull "${{ env.OLLAMA_MODEL }}"
-          ollama list
-
       - name: Run AI Patching Engine
         env:
-          OLLAMA_HOST: "http://localhost:11434"
-          OLLAMA_MODEL: ${{ env.OLLAMA_MODEL }}
+          PROVIDER: ${{ env.PROVIDER }}
+          API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
+          OPENAI_ENDPOINT: ${{ env.OPENAI_ENDPOINT }}
+          OLLAMA_TIMEOUT: "120"
           TRIVY_RESULTS: "trivy-results.json"
           DOCKERFILE_PATH: "Dockerfile"
           PATCHED_DOCKERFILE_PATH: "Dockerfile.patched"

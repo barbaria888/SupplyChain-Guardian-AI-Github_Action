@@ -49,12 +49,12 @@ inputs:
     default: 'CRITICAL,HIGH'
 
   provider:
-    description: 'LLM inference provider: ollama, gemini, or openai'
+    description: 'LLM inference provider: ollama, gemini, or openai-compatible APIs'
     required: false
     default: 'ollama'
 
   model:
-    description: 'Model name/tag for the selected provider (e.g., llama3.2:1b, gemini-2.0-flash, gpt-4o-mini)'
+    description: 'Model name/tag for the selected provider (e.g., llama3.2:1b, gemini-2.0-flash, nvidia/nemotron-3-ultra-550b-a55b)'
     required: false
     default: ''
 
@@ -62,6 +62,11 @@ inputs:
     description: 'API key for cloud providers (gemini, openai). Not required for ollama.'
     required: false
     default: ''
+
+  openai-endpoint:
+    description: 'OpenAI-compatible chat completions endpoint (used when provider=openai)'
+    required: false
+    default: 'https://api.openai.com/v1/chat/completions'
 
   trivy-version:
     description: 'Trivy version to use for scanning'
@@ -301,9 +306,10 @@ runs:
         PROVIDER: ${{ inputs.provider }}
         API_KEY: ${{ inputs.api-key }}
         OLLAMA_HOST: "http://localhost:11434"
-        OLLAMA_MODEL: ${{ inputs.model || 'qwen3:4b' }}
+        OLLAMA_MODEL: ${{ inputs.model || 'llama3.2:1b' }}
         GEMINI_MODEL: ${{ inputs.model || 'gemini-2.0-flash' }}
-        OPENAI_MODEL: ${{ inputs.model || 'gpt-4o-mini' }}
+        OPENAI_MODEL: ${{ inputs.model || 'nvidia/nemotron-3-ultra-550b-a55b' }}
+        OPENAI_ENDPOINT: ${{ inputs.openai-endpoint }}
         OLLAMA_TIMEOUT: ${{ inputs.ollama-timeout }}
         TRIVY_RESULTS: ${{ github.workspace }}/trivy-results.json
         DOCKERFILE_PATH: ${{ inputs.dockerfile }}
