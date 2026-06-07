@@ -81,7 +81,20 @@ That's it. The action handles everything — scanning, patching, validation, and
 
 Choose the inference engine that fits your needs:
 
-### Option 1: Local Ollama (Default — Zero Cost, Full Privacy)
+### Option 1: NVIDIA Nemotron via API Key (Recommended Cloud Setup)
+
+Create this repository secret first in **GitHub Settings → Secrets and variables → Actions**: `NVIDIA_NIM_API_KEY` (get your key from NVIDIA API Catalog: https://build.nvidia.com/).
+
+```yaml
+- uses: barbaria888/SupplyChain-Guardian-AI@v1
+  with:
+    provider: 'openai'
+    model: 'nvidia/nemotron-3-ultra-550b-a55b'
+    openai-endpoint: 'https://integrate.api.nvidia.com/v1/chat/completions'
+    api-key: ${{ secrets.NVIDIA_NIM_API_KEY }}
+```
+
+### Option 2: Local Ollama (Zero Cost, Full Privacy)
 
 ```yaml
 - uses: barbaria888/SupplyChain-Guardian-AI@v1
@@ -90,7 +103,7 @@ Choose the inference engine that fits your needs:
     model: 'llama3.2:1b'    # ~700MB, runs on GitHub runner CPU
 ```
 
-### Option 2: Google Gemini (Fast, Low Cost)
+### Option 3: Google Gemini (Fast, Low Cost)
 
 ```yaml
 - uses: barbaria888/SupplyChain-Guardian-AI@v1
@@ -100,7 +113,7 @@ Choose the inference engine that fits your needs:
     api-key: ${{ secrets.GEMINI_API_KEY }}
 ```
 
-### Option 3: OpenAI / Azure OpenAI
+### Option 4: OpenAI / Azure OpenAI
 
 ```yaml
 - uses: barbaria888/SupplyChain-Guardian-AI@v1
@@ -136,6 +149,7 @@ Choose the inference engine that fits your needs:
 | `provider` | No | `ollama` | LLM provider: `ollama`, `gemini`, `openai` |
 | `model` | No | *(auto)* | Model name for the selected provider |
 | `api-key` | No | `''` | API key for cloud providers |
+| `openai-endpoint` | No | `https://api.openai.com/v1/chat/completions` | OpenAI-compatible endpoint (set NVIDIA NIM URL for Nemotron) |
 | `trivy-version` | No | `0.55.0` | Trivy version |
 | `kind-enabled` | No | `true` | Enable KinD cluster validation |
 | `kind-config` | No | `.kind/cluster-config.yaml` | KinD cluster config path |
@@ -225,9 +239,11 @@ Every pipeline run uploads (90-day retention):
 docker build -t guardian-demo:latest .
 trivy image --format json --output trivy-results.json guardian-demo:latest
 
-# Run the AI patcher locally (requires Ollama)
-ollama serve &
-ollama pull llama3.2:1b
+# Run the AI patcher locally with NVIDIA Nemotron
+PROVIDER=openai \
+API_KEY="<NVIDIA_NIM_API_KEY>" \
+OPENAI_MODEL="nvidia/nemotron-3-ultra-550b-a55b" \
+OPENAI_ENDPOINT="https://integrate.api.nvidia.com/v1/chat/completions" \
 python scripts/remediate_cve.py
 
 # Validate in a local KinD cluster
@@ -244,4 +260,4 @@ kubectl wait --for=condition=available --timeout=120s deployment/guardian-demo
 MIT — See [LICENSE](./LICENSE)
 
 
-> **Autonomous, closed-loop CVE detection and remediation for containerized workloads — no cloud LLM keys required.**
+> **Autonomous, closed-loop CVE detection and remediation for containerized workloads — supports both local Ollama and cloud providers like NVIDIA Nemotron.**

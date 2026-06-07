@@ -22,7 +22,10 @@ permissions:
   issues: write
 
 env:
-  OLLAMA_MODEL: "qwen3:4b"
+  # Dogfooding workflow override: intentionally pinned to NVIDIA Nemotron.
+  PROVIDER: "openai"
+  OPENAI_MODEL: "nvidia/nemotron-3-ultra-550b-a55b"
+  OPENAI_ENDPOINT: "https://integrate.api.nvidia.com/v1/chat/completions"
   APP_IMAGE: "guardian-demo"
   PATCHED_TAG: "guardian-demo:patched"
   NAMESPACE: "default"
@@ -151,28 +154,23 @@ jobs:
           name: trivy-results
           path: .
 
-      - name: Install Ollama
-        run: curl -fsSL https://ollama.com/install.sh | sh
-
-      - name: Start Ollama server (background)
+      - name: Validate NVIDIA API key secret is configured
+        env:
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
         run: |
-          ollama serve &
-          echo "Waiting for Ollama server..."
-          for i in $(seq 1 30); do
-            curl -sf http://localhost:11434 > /dev/null 2>&1 && echo "Ollama ready after ${i}s." && break
-            sleep 1
-          done
-          curl -sf http://localhost:11434 || { echo "Ollama failed to start."; exit 1; }
-
-      - name: Pull model
-        run: |
-          ollama pull "${{ env.OLLAMA_MODEL }}"
-          ollama list
+          if [[ "${{ env.PROVIDER }}" == "openai" && -z "$NVIDIA_NIM_API_KEY" ]]; then
+            echo "::error::Missing required secret NVIDIA_NIM_API_KEY."
+            echo "::error::Create it in Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
 
       - name: Run AI Patching Engine
         env:
-          OLLAMA_HOST: "http://localhost:11434"
-          OLLAMA_MODEL: ${{ env.OLLAMA_MODEL }}
+          PROVIDER: ${{ env.PROVIDER }}
+          API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
+          OPENAI_ENDPOINT: ${{ env.OPENAI_ENDPOINT }}
+          LLM_TIMEOUT: "120"
           TRIVY_RESULTS: "trivy-results.json"
           DOCKERFILE_PATH: "Dockerfile"
           PATCHED_DOCKERFILE_PATH: "Dockerfile.patched"
@@ -584,7 +582,7 @@ jobs:
           |---|---|
           | **Workflow Run** | [View Run]($RUN_URL) |
           | **Scan Date** | $SCAN_DATE |
-          | **Model Used** | \`${{ env.OLLAMA_MODEL }}\` (CPU-only, zero external API calls) |
+          | **Model Used** | \`${{ env.OPENAI_MODEL }}\` via NVIDIA NIM |
           | **Validation** | Ephemeral KinD cluster — all health gates passed |
 
           ### Evidence Chain
