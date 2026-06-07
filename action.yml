@@ -308,7 +308,7 @@ runs:
         OLLAMA_HOST: "http://localhost:11434"
         OLLAMA_MODEL: ${{ inputs.model || 'llama3.2:1b' }}
         GEMINI_MODEL: ${{ inputs.model || 'gemini-2.0-flash' }}
-        OPENAI_MODEL: ${{ inputs.model || 'nvidia/nemotron-3-ultra-550b-a55b' }}
+        OPENAI_MODEL: ${{ inputs.model || 'gpt-4o-mini' }}
         OPENAI_ENDPOINT: ${{ inputs.openai-endpoint }}
         LLM_TIMEOUT: ${{ inputs.ollama-timeout }}
         TRIVY_RESULTS: ${{ github.workspace }}/trivy-results.json

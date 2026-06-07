@@ -22,6 +22,7 @@ permissions:
   issues: write
 
 env:
+  # Dogfooding workflow override: intentionally pinned to NVIDIA Nemotron.
   PROVIDER: "openai"
   OPENAI_MODEL: "nvidia/nemotron-3-ultra-550b-a55b"
   OPENAI_ENDPOINT: "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -152,6 +153,16 @@ jobs:
         with:
           name: trivy-results
           path: .
+
+      - name: Validate NVIDIA API key secret is configured
+        env:
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+        run: |
+          if [[ -z "$NVIDIA_NIM_API_KEY" ]]; then
+            echo "::error::Missing required secret NVIDIA_NIM_API_KEY."
+            echo "::error::Create it in Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
 
       - name: Run AI Patching Engine
         env:

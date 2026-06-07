@@ -83,7 +83,7 @@ Choose the inference engine that fits your needs:
 
 ### Option 1: NVIDIA Nemotron via API Key (Recommended Cloud Setup)
 
-Create this repository secret first: `NVIDIA_NIM_API_KEY`.
+Create this repository secret first: `NVIDIA_NIM_API_KEY` (get your key from NVIDIA API Catalog: https://build.nvidia.com/).
 
 ```yaml
 - uses: barbaria888/SupplyChain-Guardian-AI@v1
