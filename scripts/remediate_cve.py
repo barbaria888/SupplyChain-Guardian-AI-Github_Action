@@ -49,8 +49,7 @@ LLM_TIMEOUT: int = int(_timeout_str)  # seconds
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 GEMINI_ENDPOINT: str = "https://generativelanguage.googleapis.com/v1beta/models"
 
-# OpenAI-compatible provider settings (works with OpenAI, Azure OpenAI, etc.)
-OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "deepseek-ai/deepseek-v4-flash")
 OPENAI_ENDPOINT: str = os.getenv("OPENAI_ENDPOINT", "https://api.openai.com/v1/chat/completions")
 
 TRIVY_RESULTS_PATH: Path = Path(os.getenv("TRIVY_RESULTS", "trivy-results.json"))
@@ -357,11 +356,10 @@ def _call_openai(prompt: str, attempt: int) -> str:
             {"role": "system", "content": _SYSTEM_INSTRUCTIONS},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": 16384,
+        "max_tokens": 2048,
         "temperature": 1.00,
         "top_p": 0.95,
         "stream": False,
-        "chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"},
     }
     log.info("Calling OpenAI-compatible endpoint (attempt %d/%d) model=%s", attempt, MAX_RETRIES, OPENAI_MODEL)
     response = requests.post(OPENAI_ENDPOINT, json=payload, headers=headers, timeout=LLM_TIMEOUT)

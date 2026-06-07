@@ -54,7 +54,7 @@ inputs:
     default: 'ollama'
 
   model:
-    description: 'Model name/tag for the selected provider (e.g., llama3.2:1b, gemini-2.0-flash, nvidia/nemotron-3-ultra-550b-a55b)'
+    description: 'Model name/tag for the selected provider (e.g., llama3.2:1b, gemini-2.0-flash, deepseek-ai/deepseek-v4-flash)'
     required: false
     default: ''
 
@@ -308,7 +308,7 @@ runs:
         OLLAMA_HOST: "http://localhost:11434"
         OLLAMA_MODEL: ${{ inputs.model || 'qwen3:4b' }}
         GEMINI_MODEL: ${{ inputs.model || 'gemini-2.0-flash' }}
-        OPENAI_MODEL: ${{ inputs.model || 'gpt-4o-mini' }}
+        OPENAI_MODEL: ${{ inputs.model || 'deepseek-ai/deepseek-v4-flash' }}
         OPENAI_ENDPOINT: ${{ inputs.openai-endpoint }}
         LLM_TIMEOUT: ${{ inputs.ollama-timeout }}
         TRIVY_RESULTS: ${{ github.workspace }}/trivy-results.json
