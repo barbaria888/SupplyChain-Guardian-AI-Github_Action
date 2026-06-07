@@ -339,7 +339,7 @@ def _call_gemini(prompt: str, attempt: int) -> str:
 def _call_openai(prompt: str, attempt: int) -> str:
     """
     POST to OpenAI-compatible chat completions API.
-    Works with OpenAI, Azure OpenAI, and any compatible endpoint.
+    Works with OpenAI, Azure OpenAI, and any compatible endpoint (like NVIDIA API).
     Requires API_KEY to be set.
     """
     if not API_KEY:
@@ -349,6 +349,7 @@ def _call_openai(prompt: str, attempt: int) -> str:
     headers = {
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json",
+        "Accept": "application/json"
     }
     payload = {
         "model": OPENAI_MODEL,
@@ -360,8 +361,9 @@ def _call_openai(prompt: str, attempt: int) -> str:
         "temperature": 1.00,
         "top_p": 0.95,
         "stream": False,
+        "chat_template_kwargs": {"enable_thinking": True},
     }
-    log.info("Calling OpenAI (attempt %d/%d) model=%s", attempt, MAX_RETRIES, OPENAI_MODEL)
+    log.info("Calling OpenAI-compatible endpoint (attempt %d/%d) model=%s", attempt, MAX_RETRIES, OPENAI_MODEL)
     response = requests.post(OPENAI_ENDPOINT, json=payload, headers=headers, timeout=LLM_TIMEOUT)
     response.raise_for_status()
     data = response.json()
