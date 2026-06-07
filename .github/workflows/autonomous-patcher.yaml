@@ -158,7 +158,7 @@ jobs:
         env:
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
         run: |
-          if [[ -z "$NVIDIA_NIM_API_KEY" ]]; then
+          if [[ "${{ env.PROVIDER }}" == "openai" && -z "$NVIDIA_NIM_API_KEY" ]]; then
             echo "::error::Missing required secret NVIDIA_NIM_API_KEY."
             echo "::error::Create it in Settings -> Secrets and variables -> Actions."
             exit 1
