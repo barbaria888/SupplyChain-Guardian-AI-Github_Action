@@ -571,7 +571,7 @@ jobs:
           |---|---|
           | **Workflow Run** | [View Run]($RUN_URL) |
           | **Scan Date** | $SCAN_DATE |
-          | **Model Used** | \`${{ env.OLLAMA_MODEL }}\` (CPU-only, zero external API calls) |
+          | **Model Used** | \`${{ env.OPENAI_MODEL }}\` via NVIDIA NIM |
           | **Validation** | Ephemeral KinD cluster — all health gates passed |
 
           ### Evidence Chain
