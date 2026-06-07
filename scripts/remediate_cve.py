@@ -361,7 +361,7 @@ def _call_openai(prompt: str, attempt: int) -> str:
         "temperature": 1.00,
         "top_p": 0.95,
         "stream": False,
-        "chat_template_kwargs": {"enable_thinking": True},
+        "chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"},
     }
     log.info("Calling OpenAI-compatible endpoint (attempt %d/%d) model=%s", attempt, MAX_RETRIES, OPENAI_MODEL)
     response = requests.post(OPENAI_ENDPOINT, json=payload, headers=headers, timeout=LLM_TIMEOUT)
