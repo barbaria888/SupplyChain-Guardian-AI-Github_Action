@@ -306,7 +306,7 @@ runs:
         PROVIDER: ${{ inputs.provider }}
         API_KEY: ${{ inputs.api-key }}
         OLLAMA_HOST: "http://localhost:11434"
-        OLLAMA_MODEL: ${{ inputs.model || 'llama3.2:1b' }}
+        OLLAMA_MODEL: ${{ inputs.model || 'qwen3:4b' }}
         GEMINI_MODEL: ${{ inputs.model || 'gemini-2.0-flash' }}
         OPENAI_MODEL: ${{ inputs.model || 'gpt-4o-mini' }}
         OPENAI_ENDPOINT: ${{ inputs.openai-endpoint }}

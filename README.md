@@ -260,4 +260,4 @@ kubectl wait --for=condition=available --timeout=120s deployment/guardian-demo
 MIT — See [LICENSE](./LICENSE)
 
 
-> **Autonomous, closed-loop CVE detection and remediation for containerized workloads — supports NVIDIA Nemotron API keys out of the box.**
+> **Autonomous, closed-loop CVE detection and remediation for containerized workloads — supports both local Ollama and cloud providers like NVIDIA Nemotron.**
