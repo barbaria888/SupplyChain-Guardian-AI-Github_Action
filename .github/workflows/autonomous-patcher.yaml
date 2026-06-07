@@ -159,7 +159,7 @@ jobs:
           API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
           OPENAI_ENDPOINT: ${{ env.OPENAI_ENDPOINT }}
-          OLLAMA_TIMEOUT: "120"
+          LLM_TIMEOUT: "120"
           TRIVY_RESULTS: "trivy-results.json"
           DOCKERFILE_PATH: "Dockerfile"
           PATCHED_DOCKERFILE_PATH: "Dockerfile.patched"

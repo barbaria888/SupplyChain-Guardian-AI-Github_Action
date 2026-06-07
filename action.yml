@@ -310,7 +310,7 @@ runs:
         GEMINI_MODEL: ${{ inputs.model || 'gemini-2.0-flash' }}
         OPENAI_MODEL: ${{ inputs.model || 'nvidia/nemotron-3-ultra-550b-a55b' }}
         OPENAI_ENDPOINT: ${{ inputs.openai-endpoint }}
-        OLLAMA_TIMEOUT: ${{ inputs.ollama-timeout }}
+        LLM_TIMEOUT: ${{ inputs.ollama-timeout }}
         TRIVY_RESULTS: ${{ github.workspace }}/trivy-results.json
         DOCKERFILE_PATH: ${{ inputs.dockerfile }}
         PATCHED_DOCKERFILE_PATH: ${{ github.workspace }}/Dockerfile.patched
