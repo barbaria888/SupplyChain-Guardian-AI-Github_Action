@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import base64
 import requests
 
 # ---------------------------------------------------------------------------
@@ -355,8 +356,10 @@ def _call_openai(prompt: str, attempt: int) -> str:
             {"role": "system", "content": _SYSTEM_INSTRUCTIONS},
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.0,
-        "max_tokens": 2048,
+        "max_tokens": 16384,
+        "temperature": 1.00,
+        "top_p": 0.95,
+        "stream": False,
     }
     log.info("Calling OpenAI (attempt %d/%d) model=%s", attempt, MAX_RETRIES, OPENAI_MODEL)
     response = requests.post(OPENAI_ENDPOINT, json=payload, headers=headers, timeout=LLM_TIMEOUT)
