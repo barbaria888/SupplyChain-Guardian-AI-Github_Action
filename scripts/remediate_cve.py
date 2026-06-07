@@ -40,7 +40,9 @@ API_KEY: str = os.getenv("API_KEY", "")  # Required for gemini/openai providers
 
 OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
-LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", os.getenv("OLLAMA_TIMEOUT", "120")))  # seconds
+# Backward compatible timeout lookup: prefer LLM_TIMEOUT, fallback to legacy OLLAMA_TIMEOUT.
+_timeout_str = os.getenv("LLM_TIMEOUT") or os.getenv("OLLAMA_TIMEOUT") or "120"
+LLM_TIMEOUT: int = int(_timeout_str)  # seconds
 
 # Gemini provider settings
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
