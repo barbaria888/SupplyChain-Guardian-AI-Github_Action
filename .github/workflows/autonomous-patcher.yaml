@@ -25,7 +25,7 @@ env:
   # Dogfooding workflow override: intentionally pinned to NVIDIA Nemotron.
   PROVIDER: "openai"
   OPENAI_MODEL: "deepseek-ai/deepseek-v4-flash"
-  OPENAI_ENDPOINT: "https://integrate.api.nvidia.com/v1/chat/completions"
+  OPENAI_ENDPOINT: "https://integrate.api.nvidia.com/v1"
   APP_IMAGE: "guardian-demo"
   PATCHED_TAG: "guardian-demo:patched"
   NAMESPACE: "default"
