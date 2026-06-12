@@ -4,7 +4,7 @@
 # Works with local Ollama or any OpenAI-compatible API (NVIDIA, DeepSeek, etc.)
 #
 # Usage:
-#   - uses: barbaria888/SupplyChain-Guardian-AI@v1
+#   - uses: barbaria888/SupplyChain-Guardian-AI-Github_Action@v2
 #     with:
 #       dockerfile: './Dockerfile'
 #       provider: 'openai'

@@ -1,6 +1,6 @@
 # Supply Chain Guardian AI
 
-[![Autonomous Supply Chain Patcher](https://github.com/barbaria888/SupplyChain-Guardian-AI/actions/workflows/autonomous-patcher.yaml/badge.svg)](https://github.com/barbaria888/SupplyChain-Guardian-AI/actions/workflows/autonomous-patcher.yaml)
+[![Autonomous Supply Chain Patcher](https://github.com/barbaria888/SupplyChain-Guardian-AI-Github_Action/actions/workflows/autonomous-patcher.yaml/badge.svg)](https://github.com/barbaria888/SupplyChain-Guardian-AI-Github_Action/actions/workflows/autonomous-patcher.yaml)
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Supply%20Chain%20Guardian%20AI-blueviolet?logo=github)](https://github.com/marketplace/actions/supply-chain-guardian-ai)
 [![Supply Chain Guardian](https://img.shields.io/badge/pipeline-supply--chain--guardian-blueviolet)](https://github.com)
 [![Security](https://img.shields.io/badge/security-trivy--scanned-brightgreen)](https://github.com/aquasecurity/trivy)
@@ -68,7 +68,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run Supply Chain Guardian
-        uses: barbaria888/SupplyChain-Guardian-AI@v1
+        uses: barbaria888/SupplyChain-Guardian-AI-Github_Action@v2
         with:
           dockerfile: './Dockerfile'
 ```
@@ -86,37 +86,27 @@ Choose the inference engine that fits your needs:
 Create this repository secret first in **GitHub Settings → Secrets and variables → Actions**: `NVIDIA_NIM_API_KEY` (get your key from NVIDIA API Catalog: https://build.nvidia.com/).
 
 ```yaml
-- uses: barbaria888/SupplyChain-Guardian-AI@v1
+- uses: barbaria888/SupplyChain-Guardian-AI-Github_Action@v2
   with:
     provider: 'openai'
     model: 'deepseek-ai/deepseek-v4-flash'
-    openai-endpoint: 'https://integrate.api.nvidia.com/v1/chat/completions'
+    openai-endpoint: 'https://integrate.api.nvidia.com/v1'
     api-key: ${{ secrets.NVIDIA_NIM_API_KEY }}
 ```
 
 ### Option 2: Local Ollama (Zero Cost, Full Privacy)
 
 ```yaml
-- uses: barbaria888/SupplyChain-Guardian-AI@v1
+- uses: barbaria888/SupplyChain-Guardian-AI-Github_Action@v2
   with:
     provider: 'ollama'
     model: 'llama3.2:1b'    # ~700MB, runs on GitHub runner CPU
 ```
 
-### Option 3: Google Gemini (Fast, Low Cost)
+### Option 3: OpenAI / Azure OpenAI
 
 ```yaml
-- uses: barbaria888/SupplyChain-Guardian-AI@v1
-  with:
-    provider: 'gemini'
-    model: 'gemini-2.0-flash'
-    api-key: ${{ secrets.GEMINI_API_KEY }}
-```
-
-### Option 4: OpenAI / Azure OpenAI
-
-```yaml
-- uses: barbaria888/SupplyChain-Guardian-AI@v1
+- uses: barbaria888/SupplyChain-Guardian-AI-Github_Action@v2
   with:
     provider: 'openai'
     model: 'deepseek-ai/deepseek-v4-flash'
