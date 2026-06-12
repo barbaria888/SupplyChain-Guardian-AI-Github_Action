@@ -182,9 +182,21 @@ runs:
         if [[ "${{ inputs.dockerfile }}" = /* ]]; then
           DOCKERFILE="${{ inputs.dockerfile }}"
         fi
+
+        if [[ "${{ inputs.dockerfile }}" == *"/"* ]]; then
+          DIR_PART=$(dirname "${{ inputs.dockerfile }}")
+          if [[ "$DIR_PART" = /* ]]; then
+            BUILD_CONTEXT="$DIR_PART"
+          else
+            BUILD_CONTEXT="${{ github.workspace }}/$DIR_PART"
+          fi
+        else
+          BUILD_CONTEXT="${{ github.workspace }}"
+        fi
+
         bash "${{ github.action_path }}/scripts/preflight_docker.sh" \
           "$DOCKERFILE" \
-          "${{ github.workspace }}"
+          "$BUILD_CONTEXT"
 
     - name: Build baseline image for scanning
       if: inputs.image-ref == ''
@@ -195,7 +207,19 @@ runs:
         if [[ "${{ inputs.dockerfile }}" = /* ]]; then
           DOCKERFILE="${{ inputs.dockerfile }}"
         fi
-        docker build --tag "guardian-scan:baseline" --file "$DOCKERFILE" "${{ github.workspace }}"
+
+        if [[ "${{ inputs.dockerfile }}" == *"/"* ]]; then
+          DIR_PART=$(dirname "${{ inputs.dockerfile }}")
+          if [[ "$DIR_PART" = /* ]]; then
+            BUILD_CONTEXT="$DIR_PART"
+          else
+            BUILD_CONTEXT="${{ github.workspace }}/$DIR_PART"
+          fi
+        else
+          BUILD_CONTEXT="${{ github.workspace }}"
+        fi
+
+        docker build --tag "guardian-scan:baseline" --file "$DOCKERFILE" "$BUILD_CONTEXT"
 
     - name: Run Trivy vulnerability scan
       id: scan
@@ -318,9 +342,20 @@ runs:
       env:
         POLICY_PRESET: ${{ inputs.policy-preset }}
       run: |
+        if [[ "${{ inputs.dockerfile }}" == *"/"* ]]; then
+          DIR_PART=$(dirname "${{ inputs.dockerfile }}")
+          if [[ "$DIR_PART" = /* ]]; then
+            BUILD_CONTEXT="$DIR_PART"
+          else
+            BUILD_CONTEXT="${{ github.workspace }}/$DIR_PART"
+          fi
+        else
+          BUILD_CONTEXT="${{ github.workspace }}"
+        fi
+
         bash "${{ github.action_path }}/scripts/preflight_docker.sh" \
           "${{ github.workspace }}/Dockerfile.patched" \
-          "${{ github.workspace }}"
+          "$BUILD_CONTEXT"
 
     - name: Smoke test — build + runtime validation
       id: smoke-test
@@ -331,8 +366,19 @@ runs:
         PATCHED="${{ github.workspace }}/Dockerfile.patched"
         SMOKE_IMAGE="guardian-scan:smoke-test"
 
+        if [[ "${{ inputs.dockerfile }}" == *"/"* ]]; then
+          DIR_PART=$(dirname "${{ inputs.dockerfile }}")
+          if [[ "$DIR_PART" = /* ]]; then
+            BUILD_CONTEXT="$DIR_PART"
+          else
+            BUILD_CONTEXT="${{ github.workspace }}/$DIR_PART"
+          fi
+        else
+          BUILD_CONTEXT="${{ github.workspace }}"
+        fi
+
         # Build gate
-        if ! docker build -f "$PATCHED" -t "$SMOKE_IMAGE" "${{ github.workspace }}"; then
+        if ! docker build -f "$PATCHED" -t "$SMOKE_IMAGE" "$BUILD_CONTEXT"; then
           echo "::error::Smoke test FAILED — build errors"
           echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
           exit 1
