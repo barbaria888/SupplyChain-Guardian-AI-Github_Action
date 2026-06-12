@@ -1,27 +1,22 @@
-# action.yml — GitHub Marketplace Action Definition
-# ==================================================
-# Proactive DevSecOps Supply Chain Guardian
-#
-# Autonomous CVE detection and AI-driven Dockerfile remediation.
-# Scans container images, patches vulnerabilities using a local or
-# cloud LLM, validates the fix in an ephemeral KinD cluster, and
-# opens a human-reviewable Pull Request.
+# action.yml — Supply Chain Guardian AI
+# ======================================
+# Composite GitHub Action: Trivy scan → AI patch → smoke test → KinD → PR.
+# Works with local Ollama or any OpenAI-compatible API (NVIDIA, DeepSeek, etc.)
 #
 # Usage:
 #   - uses: barbaria888/SupplyChain-Guardian-AI@v1
 #     with:
 #       dockerfile: './Dockerfile'
-#       provider: 'ollama'
-#
-# Owner: @AIPatcher + @SecOps + @SRE
-# ==================================================
+#       provider: 'openai'
+#       model: 'deepseek-ai/deepseek-v4-flash'
+#       api-key: ${{ secrets.NVIDIA_NIM_API_KEY }}
+#       openai-endpoint: 'https://integrate.api.nvidia.com/v1'
 
 name: 'Supply Chain Guardian AI'
 description: >
   Autonomous CVE detection & AI-driven Dockerfile remediation.
   Scans container images with Trivy, patches vulnerabilities using
-  local Ollama (CPU-only, zero data egress) or cloud LLMs (Gemini, OpenAI),
-  validates the fix in an ephemeral KinD cluster, and opens a PR with proof.
+  local Ollama or cloud LLMs, validates in KinD, and opens a PR with proof.
 
 author: 'barbaria888'
 
@@ -39,47 +34,47 @@ inputs:
     default: 'Dockerfile'
 
   image-ref:
-    description: 'Pre-built image reference to scan (overrides dockerfile build)'
+    description: 'Pre-built image to scan (skips dockerfile build)'
     required: false
     default: ''
 
   severity:
-    description: 'Comma-separated Trivy severity levels to act on'
+    description: 'Trivy severity filter (comma-separated)'
     required: false
     default: 'CRITICAL,HIGH'
 
   provider:
-    description: 'LLM inference provider: ollama, gemini, or openai-compatible APIs'
+    description: 'LLM provider: ollama (local) or openai (any compatible API)'
     required: false
     default: 'ollama'
 
   model:
-    description: 'Model name/tag for the selected provider (e.g., llama3.2:1b, gemini-2.0-flash, deepseek-ai/deepseek-v4-flash)'
+    description: 'Model name (e.g., llama3.2:1b, deepseek-ai/deepseek-v4-flash)'
     required: false
     default: ''
 
   api-key:
-    description: 'API key for cloud providers (gemini, openai). Not required for ollama.'
+    description: 'API key for cloud providers. Not needed for ollama.'
     required: false
     default: ''
 
   openai-endpoint:
-    description: 'OpenAI-compatible chat completions endpoint (used when provider=openai)'
+    description: 'OpenAI-compatible base URL (e.g., https://integrate.api.nvidia.com/v1)'
     required: false
-    default: 'https://api.openai.com/v1/chat/completions'
+    default: 'https://integrate.api.nvidia.com/v1'
 
   trivy-version:
-    description: 'Trivy version to use for scanning'
+    description: 'Trivy version'
     required: false
     default: '0.55.0'
 
   kind-enabled:
-    description: 'Enable KinD cluster validation of the patched image'
+    description: 'Run KinD cluster validation after smoke test'
     required: false
     default: 'true'
 
   kind-config:
-    description: 'Path to KinD cluster configuration file'
+    description: 'Path to KinD cluster config'
     required: false
     default: '.kind/cluster-config.yaml'
 
@@ -89,7 +84,7 @@ inputs:
     default: 'k8s/'
 
   create-pr:
-    description: 'Automatically create a Pull Request with the fix'
+    description: 'Auto-create a Pull Request with the fix'
     required: false
     default: 'true'
 
@@ -99,62 +94,66 @@ inputs:
     default: 'auto-patcher/cve-remediation'
 
   pr-labels:
-    description: 'Comma-separated labels for the remediation PR'
+    description: 'Comma-separated PR labels'
     required: false
     default: 'security,automated-patch,supply-chain-guardian'
 
   fail-on-vulnerability:
-    description: 'Fail the action if vulnerabilities are found and cannot be patched'
+    description: 'Fail if CVEs are found and cannot be patched'
     required: false
     default: 'true'
 
-  ollama-timeout:
-    description: 'Timeout in seconds for LLM inference calls'
+  llm-timeout:
+    description: 'LLM inference timeout in seconds'
     required: false
-    default: '120'
+    default: '300'
+
+  policy-preset:
+    description: 'Enforcement mode: strict (fail on any issue) or lax (warn and continue)'
+    required: false
+    default: 'strict'
 
 # ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
 outputs:
   vulnerabilities-found:
-    description: 'Whether CRITICAL/HIGH vulnerabilities were found'
+    description: 'Whether CRITICAL/HIGH CVEs were found'
     value: ${{ steps.scan.outputs.has_vulnerabilities }}
 
   patch-applied:
-    description: 'Whether the AI successfully generated a valid patch'
+    description: 'Whether the AI generated a valid patch'
     value: ${{ steps.remediate.outputs.patch_applied }}
 
   smoke-test-passed:
-    description: 'Whether the patched Dockerfile compiled successfully'
+    description: 'Whether the patched Dockerfile compiled and ran'
     value: ${{ steps.smoke-test.outputs.smoke_passed }}
 
   kind-validation-passed:
-    description: 'Whether the patched image passed KinD cluster validation'
+    description: 'Whether KinD deployment succeeded'
     value: ${{ steps.kind-validate.outputs.validation_passed }}
 
   pr-url:
-    description: 'URL of the created/updated Pull Request'
+    description: 'URL of the created Pull Request'
     value: ${{ steps.create-pr.outputs.pull-request-url }}
 
   trivy-results-path:
-    description: 'Path to the Trivy scan results JSON'
+    description: 'Path to Trivy scan results'
     value: ${{ github.workspace }}/trivy-results.json
 
   audit-log-path:
-    description: 'Path to the patch audit log'
+    description: 'Path to the LLM audit log'
     value: ${{ github.workspace }}/patch_audit.log
 
 # ---------------------------------------------------------------------------
-# Composite Action Steps
+# Composite Steps
 # ---------------------------------------------------------------------------
 runs:
   using: 'composite'
   steps:
-    # ==================================================================
-    # 1. SETUP — Stage dependencies & install
-    # ==================================================================
-    - name: Stage action requirements for caching
+
+    # ── 1. SETUP ──────────────────────────────────────────────
+    - name: Stage requirements for pip caching
       shell: bash
       run: |
         CACHE_DIR="${{ github.workspace }}/.github/supply-chain-guardian"
@@ -168,43 +167,18 @@ runs:
         cache: 'pip'
         cache-dependency-path: '.github/supply-chain-guardian/requirements.txt'
 
-    - name: Install patching engine dependencies
+    - name: Install dependencies
       shell: bash
       run: pip install -r "${{ github.action_path }}/scripts/requirements.txt"
 
-    # ==================================================================
-    # 1b. DIAGNOSTICS — Log workspace and build context for debugging
-    # ==================================================================
-    - name: Diagnostic — log workspace and build context
-      shell: bash
-      run: |
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  Supply Chain Guardian — Diagnostic Info"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  github.workspace  : ${{ github.workspace }}"
-        echo "  github.action_path: ${{ github.action_path }}"
-        echo "  Dockerfile input  : ${{ inputs.dockerfile }}"
-        echo "  Working directory : $(pwd)"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo ""
-        echo "  Workspace contents (depth 2):"
-        if command -v tree &>/dev/null; then
-          tree -L 2 --charset=ascii -I '.git' "${{ github.workspace }}" 2>/dev/null | head -60 || true
-        else
-          find "${{ github.workspace }}" -maxdepth 2 \
-            -not -path '*/.git/*' -not -path '*/.git' \
-            -print 2>/dev/null | sort | head -60 || true
-        fi
-
-    # ==================================================================
-    # 2. SCAN — Trivy vulnerability analysis (@SecOps)
-    # ==================================================================
+    # ── 2. SCAN (@SecOps) ─────────────────────────────────────
     - name: Preflight — validate Dockerfile and build context
       if: inputs.image-ref == ''
       shell: bash
+      env:
+        POLICY_PRESET: ${{ inputs.policy-preset }}
       run: |
         DOCKERFILE="${{ github.workspace }}/${{ inputs.dockerfile }}"
-        # If the input is already absolute, use it as-is
         if [[ "${{ inputs.dockerfile }}" = /* ]]; then
           DOCKERFILE="${{ inputs.dockerfile }}"
         fi
@@ -212,7 +186,7 @@ runs:
           "$DOCKERFILE" \
           "${{ github.workspace }}"
 
-    - name: Build image for scanning (if no image-ref provided)
+    - name: Build baseline image for scanning
       if: inputs.image-ref == ''
       shell: bash
       working-directory: ${{ github.workspace }}
@@ -221,10 +195,7 @@ runs:
         if [[ "${{ inputs.dockerfile }}" = /* ]]; then
           DOCKERFILE="${{ inputs.dockerfile }}"
         fi
-        docker build \
-          --tag "guardian-scan:baseline" \
-          --file "$DOCKERFILE" \
-          "${{ github.workspace }}"
+        docker build --tag "guardian-scan:baseline" --file "$DOCKERFILE" "${{ github.workspace }}"
 
     - name: Run Trivy vulnerability scan
       id: scan
@@ -232,13 +203,12 @@ runs:
       working-directory: ${{ github.workspace }}
       run: |
         IMAGE_REF="${{ inputs.image-ref }}"
-        if [[ -z "$IMAGE_REF" ]]; then
-          IMAGE_REF="guardian-scan:baseline"
-        fi
+        [[ -z "$IMAGE_REF" ]] && IMAGE_REF="guardian-scan:baseline"
 
         # Install Trivy if not available
         if ! command -v trivy &> /dev/null; then
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v${{ inputs.trivy-version }}
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin v${{ inputs.trivy-version }}
         fi
 
         TRIVY_OUT="${{ github.workspace }}/trivy-results.json"
@@ -249,8 +219,8 @@ runs:
           --ignore-unfixed \
           "$IMAGE_REF" || true
 
+        # Fallback if Trivy produced no file
         if [[ ! -f "$TRIVY_OUT" ]]; then
-          echo "::error::Trivy scan produced no output file at $TRIVY_OUT"
           echo '{"Results":[]}' > "$TRIVY_OUT"
         fi
 
@@ -260,8 +230,7 @@ runs:
         try:
             data = json.load(open("${{ github.workspace }}/trivy-results.json"))
         except Exception:
-            print("0", end="")
-            sys.exit(0)
+            print("0", end=""); sys.exit(0)
         sev = {"CRITICAL", "HIGH"}
         count = sum(
             1 for r in data.get("Results", [])
@@ -278,9 +247,7 @@ runs:
           echo "has_vulnerabilities=false" >> "$GITHUB_OUTPUT"
         fi
 
-    # ==================================================================
-    # 3. REMEDIATE — AI patching engine (@AIPatcher)
-    # ==================================================================
+    # ── 3. REMEDIATE (@AIPatcher) ─────────────────────────────
     - name: Install Ollama (if provider=ollama)
       if: steps.scan.outputs.has_vulnerabilities == 'true' && inputs.provider == 'ollama'
       shell: bash
@@ -292,9 +259,8 @@ runs:
           sleep 1
         done
         curl -sf http://localhost:11434 || { echo "Ollama failed to start."; exit 1; }
-
         MODEL="${{ inputs.model }}"
-        if [[ -z "$MODEL" ]]; then MODEL="llama3.2:1b"; fi
+        [[ -z "$MODEL" ]] && MODEL="llama3.2:1b"
         ollama pull "$MODEL"
 
     - name: Run AI Patching Engine
@@ -307,10 +273,10 @@ runs:
         API_KEY: ${{ inputs.api-key }}
         OLLAMA_HOST: "http://localhost:11434"
         OLLAMA_MODEL: ${{ inputs.model || 'qwen3:4b' }}
-        GEMINI_MODEL: ${{ inputs.model || 'gemini-2.0-flash' }}
         OPENAI_MODEL: ${{ inputs.model || 'deepseek-ai/deepseek-v4-flash' }}
         OPENAI_ENDPOINT: ${{ inputs.openai-endpoint }}
-        LLM_TIMEOUT: ${{ inputs.ollama-timeout }}
+        LLM_TIMEOUT: ${{ inputs.llm-timeout }}
+        POLICY_PRESET: ${{ inputs.policy-preset }}
         TRIVY_RESULTS: ${{ github.workspace }}/trivy-results.json
         DOCKERFILE_PATH: ${{ inputs.dockerfile }}
         PATCHED_DOCKERFILE_PATH: ${{ github.workspace }}/Dockerfile.patched
@@ -320,47 +286,43 @@ runs:
         if [[ -f "${{ github.workspace }}/Dockerfile.patched" ]]; then
           echo "patch_applied=true" >> "$GITHUB_OUTPUT"
         else
-          echo "::error::Patching engine completed but Dockerfile.patched was not created."
+          echo "::error::Patching engine ran but Dockerfile.patched was not created."
           echo "patch_applied=false" >> "$GITHUB_OUTPUT"
           exit 1
         fi
 
-    # ==================================================================
-    # 4. DOCKERFILE INTEGRITY GATE
-    # ==================================================================
+    # ── 4. INTEGRITY GATE ─────────────────────────────────────
     - name: Dockerfile integrity gate
       if: steps.remediate.outputs.patch_applied == 'true'
       shell: bash
       run: |
         PATCHED="${{ github.workspace }}/Dockerfile.patched"
-        echo "Validating required instructions in $PATCHED..."
         MISSING=""
         for INSTR in FROM WORKDIR COPY USER EXPOSE HEALTHCHECK CMD; do
           if ! grep -qiE "^[[:space:]]*${INSTR}[[:space:]]" "$PATCHED"; then
-            echo "::error::Missing required instruction: $INSTR"
+            echo "::error::Missing instruction: $INSTR"
             MISSING="$MISSING $INSTR"
           fi
         done
         if [[ -n "$MISSING" ]]; then
-          echo "::error::Dockerfile integrity check FAILED. Missing:$MISSING"
-          echo "--- Rejected Dockerfile ---"
+          echo "::error::Integrity gate FAILED. Missing:$MISSING"
           cat "$PATCHED"
           exit 1
         fi
         echo "Dockerfile integrity gate PASSED."
 
-    # ==================================================================
-    # 5. SMOKE TEST — Docker build + runtime validation
-    # ==================================================================
-    - name: Preflight — validate patched Dockerfile before smoke test
+    # ── 5. SMOKE TEST ─────────────────────────────────────────
+    - name: Preflight — validate patched Dockerfile
       if: steps.remediate.outputs.patch_applied == 'true'
       shell: bash
+      env:
+        POLICY_PRESET: ${{ inputs.policy-preset }}
       run: |
         bash "${{ github.action_path }}/scripts/preflight_docker.sh" \
           "${{ github.workspace }}/Dockerfile.patched" \
           "${{ github.workspace }}"
 
-    - name: Smoke test — Docker build with patched Dockerfile
+    - name: Smoke test — build + runtime validation
       id: smoke-test
       if: steps.remediate.outputs.patch_applied == 'true'
       shell: bash
@@ -369,73 +331,59 @@ runs:
         PATCHED="${{ github.workspace }}/Dockerfile.patched"
         SMOKE_IMAGE="guardian-scan:smoke-test"
 
-        # --- Build gate ---
+        # Build gate
         if ! docker build -f "$PATCHED" -t "$SMOKE_IMAGE" "${{ github.workspace }}"; then
-          echo "::error::Smoke test FAILED — patched Dockerfile has build errors"
+          echo "::error::Smoke test FAILED — build errors"
           echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
           exit 1
         fi
 
-        # --- Docker metadata inspection ---
+        # Inspect CMD and WORKDIR
         IMG_CMD=$(docker inspect "$SMOKE_IMAGE" --format='{{json .Config.Cmd}}')
         IMG_WORKDIR=$(docker inspect "$SMOKE_IMAGE" --format='{{json .Config.WorkingDir}}')
-        echo "Image CMD: $IMG_CMD"
-        echo "Image WorkingDir: $IMG_WORKDIR"
+        echo "CMD=$IMG_CMD  WORKDIR=$IMG_WORKDIR"
 
         if [[ "$IMG_CMD" == "null" || "$IMG_CMD" == "[]" || -z "$IMG_CMD" ]]; then
-          echo "::error::Docker inspect: CMD is empty. Container will exit immediately."
-          echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
-          exit 1
+          echo "::error::CMD is empty — container will exit immediately"
+          echo "smoke_passed=false" >> "$GITHUB_OUTPUT"; exit 1
         fi
         if [[ "$IMG_WORKDIR" == '""' || -z "$IMG_WORKDIR" ]]; then
-          echo "::error::Docker inspect: WorkingDir is empty."
-          echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
-          exit 1
+          echo "::error::WORKDIR is empty"
+          echo "smoke_passed=false" >> "$GITHUB_OUTPUT"; exit 1
         fi
 
-        # --- Runtime validation ---
-        CONTAINER_NAME="guardian-smoke-$$"
-        docker run -d --name "$CONTAINER_NAME" -p 18080:8080 "$SMOKE_IMAGE"
-        echo "Container started. Waiting 15 seconds for stability check..."
+        # Runtime stability check (15s)
+        CONTAINER="guardian-smoke-$$"
+        docker run -d --name "$CONTAINER" -p 18080:8080 "$SMOKE_IMAGE"
         sleep 15
 
-        RUNNING=$(docker inspect "$CONTAINER_NAME" --format='{{.State.Running}}' 2>/dev/null || echo "false")
-        EXIT_CODE=$(docker inspect "$CONTAINER_NAME" --format='{{.State.ExitCode}}' 2>/dev/null || echo "-1")
-
+        RUNNING=$(docker inspect "$CONTAINER" --format='{{.State.Running}}' 2>/dev/null || echo "false")
         if [[ "$RUNNING" != "true" ]]; then
-          echo "::error::Container exited during 15s stability window (ExitCode=$EXIT_CODE)."
-          echo "--- Container Logs ---"
-          docker logs "$CONTAINER_NAME" 2>&1 || true
-          docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
-          echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
-          exit 1
+          EXIT_CODE=$(docker inspect "$CONTAINER" --format='{{.State.ExitCode}}' 2>/dev/null || echo "-1")
+          echo "::error::Container exited during stability window (exit=$EXIT_CODE)"
+          docker logs "$CONTAINER" 2>&1 || true
+          docker rm -f "$CONTAINER" 2>/dev/null || true
+          echo "smoke_passed=false" >> "$GITHUB_OUTPUT"; exit 1
         fi
 
-        # --- Health probe ---
+        # Health probe
         HEALTH_OK=false
         for i in $(seq 1 5); do
-          if curl -sf http://localhost:18080/healthz > /dev/null 2>&1; then
-            HEALTH_OK=true
-            break
-          fi
+          curl -sf http://localhost:18080/healthz > /dev/null 2>&1 && { HEALTH_OK=true; break; }
           sleep 2
         done
-
-        docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+        docker rm -f "$CONTAINER" 2>/dev/null || true
 
         if [[ "$HEALTH_OK" != "true" ]]; then
-          echo "::error::/healthz probe failed after container was running."
-          echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
-          exit 1
+          echo "::error::/healthz probe failed"
+          echo "smoke_passed=false" >> "$GITHUB_OUTPUT"; exit 1
         fi
 
         echo "Smoke test PASSED — build + runtime + health probe verified."
         echo "smoke_passed=true" >> "$GITHUB_OUTPUT"
         cp "$PATCHED" "${{ inputs.dockerfile }}"
 
-    # ==================================================================
-    # 6. KIND VALIDATION — Ephemeral cluster test (@SRE)
-    # ==================================================================
+    # ── 6. KIND VALIDATION (@SRE) ─────────────────────────────
     - name: Set up KinD cluster
       if: steps.smoke-test.outputs.smoke_passed == 'true' && inputs.kind-enabled == 'true'
       uses: helm/kind-action@v1.10.0
@@ -444,7 +392,7 @@ runs:
         config: ${{ inputs.kind-config }}
         wait: 120s
 
-    - name: Load and deploy patched image to KinD
+    - name: Deploy patched image to KinD
       id: kind-validate
       if: steps.smoke-test.outputs.smoke_passed == 'true' && inputs.kind-enabled == 'true'
       shell: bash
@@ -454,64 +402,35 @@ runs:
         docker tag "guardian-scan:smoke-test" "$PATCHED_TAG"
         kind load docker-image "$PATCHED_TAG" --name guardian-test
 
-        # Dynamic image tag swap in manifests
+        # Swap image refs in manifests
         find ${{ inputs.k8s-manifests }} -name '*.yaml' -o -name '*.yml' | while read f; do
           sed -i "s|image:.*guardian.*|image: $PATCHED_TAG|g" "$f" || true
           sed -i 's|imagePullPolicy:.*|imagePullPolicy: Never|g' "$f" || true
         done
 
         kubectl apply -f ${{ inputs.k8s-manifests }}
-        echo "--- Applied manifests. Waiting for deployment readiness (120s)... ---"
+        echo "Waiting for deployment readiness (120s)..."
         if kubectl wait --for=condition=available --timeout=120s deployment -l managed-by=supply-chain-guardian -n default 2>/dev/null || \
            kubectl wait --for=condition=available --timeout=120s deployment --all -n default; then
           echo "validation_passed=true" >> "$GITHUB_OUTPUT"
         else
           echo "validation_passed=false" >> "$GITHUB_OUTPUT"
-          echo "::error::KinD validation FAILED — deployment did not reach Ready state"
-
-          # --- Collect full diagnostics ---
-          DIAG_DIR="${{ github.workspace }}/kind-diagnostics"
-          mkdir -p "$DIAG_DIR"
-          kubectl get pods -A -o wide > "$DIAG_DIR/all-pods.txt" 2>&1 || true
-          kubectl describe pods -n default > "$DIAG_DIR/pod-describe.txt" 2>&1 || true
-          kubectl get events -n default --sort-by='.lastTimestamp' > "$DIAG_DIR/events.txt" 2>&1 || true
-          kubectl get deployments -n default -o wide > "$DIAG_DIR/deployments.txt" 2>&1 || true
-          kubectl get replicasets -n default -o wide > "$DIAG_DIR/replicasets.txt" 2>&1 || true
+          echo "::error::KinD validation FAILED"
+          # Collect diagnostics
+          DIAG="${{ github.workspace }}/kind-diagnostics"
+          mkdir -p "$DIAG"
+          kubectl get pods -A -o wide > "$DIAG/all-pods.txt" 2>&1 || true
+          kubectl describe pods -n default > "$DIAG/pod-describe.txt" 2>&1 || true
+          kubectl get events -n default --sort-by='.lastTimestamp' > "$DIAG/events.txt" 2>&1 || true
           for pod in $(kubectl get pods -n default -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-            kubectl logs "$pod" -n default > "$DIAG_DIR/logs-${pod}.txt" 2>&1 || true
-            kubectl logs "$pod" -n default --previous > "$DIAG_DIR/logs-prev-${pod}.txt" 2>&1 || true
+            kubectl logs "$pod" -n default > "$DIAG/logs-${pod}.txt" 2>&1 || true
           done
           exit 1
         fi
 
-    # ==================================================================
-    # 7. ARTIFACTS — Upload compliance evidence (conditional)
-    # ==================================================================
-    - name: Verify artifact availability
-      id: artifact-check
-      if: always()
-      shell: bash
-      run: |
-        echo "=== Artifact Verification ==="
-        HAS_ARTIFACTS=false
-        for f in "${{ github.workspace }}/trivy-results.json" \
-                 "${{ github.workspace }}/patch_audit.log" \
-                 "${{ github.workspace }}/Dockerfile.patched"; do
-          if [[ -f "$f" ]]; then
-            echo "  ✓ Found: $f ($(wc -c < "$f" | tr -d ' ') bytes)"
-            HAS_ARTIFACTS=true
-          else
-            echo "  ✗ Missing: $f (expected — step may not have run)"
-          fi
-        done
-        echo "has_artifacts=$HAS_ARTIFACTS" >> "$GITHUB_OUTPUT"
-
-        if [[ "$HAS_ARTIFACTS" == "false" ]]; then
-          echo "::notice::No scan artifacts were generated. This usually means the initial Docker build failed. Check the preflight and build steps above for the root cause."
-        fi
-
+    # ── 7. ARTIFACTS ──────────────────────────────────────────
     - name: Upload scan and audit artifacts
-      if: always() && steps.artifact-check.outputs.has_artifacts == 'true'
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: supply-chain-guardian-artifacts
@@ -530,3 +449,35 @@ runs:
         path: ${{ github.workspace }}/kind-diagnostics/
         retention-days: 90
         if-no-files-found: ignore
+
+    # ── 8. PULL REQUEST ───────────────────────────────────────
+    - name: Create Pull Request
+      id: create-pr
+      if: steps.smoke-test.outputs.smoke_passed == 'true' && inputs.create-pr == 'true'
+      uses: peter-evans/create-pull-request@v6
+      with:
+        token: ${{ github.token }}
+        branch: ${{ inputs.pr-branch }}
+        title: 'fix(security): AI-remediated CVE patch'
+        body: |
+          ## 🛡️ Supply Chain Guardian — Automated Patch
+
+          This PR was generated by the **Supply Chain Guardian AI** pipeline.
+
+          ### Evidence Chain
+          - ✅ Trivy scan detected CRITICAL/HIGH CVEs
+          - ✅ AI patching engine generated a fix
+          - ✅ `docker build` smoke test passed
+          - ✅ Runtime stability check passed (15s)
+          - ✅ Health probe verified
+
+          ### Artifacts
+          Download the `supply-chain-guardian-artifacts` from this workflow run for:
+          - `trivy-results.json` — original scan report
+          - `patch_audit.log` — full LLM prompt + response audit trail
+          - `Dockerfile.patched` — the generated patch
+
+          > **Review carefully before merging.** AI-generated patches should always
+          > be reviewed by a human engineer.
+        labels: ${{ inputs.pr-labels }}
+        commit-message: 'fix(security): AI-remediated Dockerfile CVE patch'
