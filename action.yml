@@ -321,14 +321,30 @@ runs:
       if: steps.remediate.outputs.patch_applied == 'true'
       shell: bash
       run: |
+        ORIGINAL="${{ github.workspace }}/${{ inputs.dockerfile }}"
+        if [[ "${{ inputs.dockerfile }}" = /* ]]; then
+          ORIGINAL="${{ inputs.dockerfile }}"
+        fi
         PATCHED="${{ github.workspace }}/Dockerfile.patched"
+
+        # Core primitives that must always remain mandatory
+        MANDATORY=("FROM" "WORKDIR" "COPY" "EXPOSE" "CMD")
+
+        # Dynamically check if USER and HEALTHCHECK exist in the original Dockerfile
+        for OPT_INSTR in USER HEALTHCHECK; do
+          if grep -qiE "^[[:space:]]*${OPT_INSTR}[[:space:]]" "$ORIGINAL"; then
+            MANDATORY+=("$OPT_INSTR")
+          fi
+        done
+
         MISSING=""
-        for INSTR in FROM WORKDIR COPY USER EXPOSE HEALTHCHECK CMD; do
+        for INSTR in "${MANDATORY[@]}"; do
           if ! grep -qiE "^[[:space:]]*${INSTR}[[:space:]]" "$PATCHED"; then
             echo "::error::Missing instruction: $INSTR"
             MISSING="$MISSING $INSTR"
           fi
         done
+
         if [[ -n "$MISSING" ]]; then
           echo "::error::Integrity gate FAILED. Missing:$MISSING"
           cat "$PATCHED"

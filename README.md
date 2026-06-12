@@ -138,7 +138,7 @@ Create this repository secret first in **GitHub Settings → Secrets and variabl
 | `severity` | No | `CRITICAL,HIGH` | Trivy severity filter |
 | `provider` | No | `ollama` | LLM provider: `ollama` or `openai` |
 | `model` | No | *(auto)* | Model name for the selected provider |
-| `api-key` | No | `''` | API key for cloud providers |
+| `api-key` | No | `''` | API key for cloud providers. Falls back to step/job env `API_KEY` if omitted |
 | `openai-endpoint` | No | `https://integrate.api.nvidia.com/v1` | OpenAI-compatible base URL (e.g. NVIDIA NIM or DeepSeek API) |
 | `trivy-version` | No | `0.55.0` | Trivy version |
 | `kind-enabled` | No | `true` | Enable KinD cluster validation |

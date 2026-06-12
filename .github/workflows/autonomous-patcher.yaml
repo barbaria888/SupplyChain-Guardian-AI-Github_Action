@@ -186,13 +186,27 @@ jobs:
         id: integrity_gate
         run: |
           echo "Validating required instructions in Dockerfile.patched..."
+          ORIGINAL="Dockerfile"
+          PATCHED="Dockerfile.patched"
+
+          # Core primitives that must always remain mandatory
+          MANDATORY=("FROM" "WORKDIR" "COPY" "EXPOSE" "CMD")
+
+          # Dynamically check if USER and HEALTHCHECK exist in the original Dockerfile
+          for OPT_INSTR in USER HEALTHCHECK; do
+            if grep -qiE "^[[:space:]]*${OPT_INSTR}[[:space:]]" "$ORIGINAL"; then
+              MANDATORY+=("$OPT_INSTR")
+            fi
+          done
+
           MISSING=""
-          for INSTR in FROM WORKDIR COPY USER EXPOSE HEALTHCHECK CMD; do
-            if ! grep -qiE "^[[:space:]]*${INSTR}[[:space:]]" Dockerfile.patched; then
+          for INSTR in "${MANDATORY[@]}"; do
+            if ! grep -qiE "^[[:space:]]*${INSTR}[[:space:]]" "$PATCHED"; then
               echo "::error::Missing required Dockerfile instruction: $INSTR"
               MISSING="$MISSING $INSTR"
             fi
           done
+
           if [[ -n "$MISSING" ]]; then
             echo "::error::Dockerfile integrity FAILED. Missing:$MISSING"
             cat Dockerfile.patched
