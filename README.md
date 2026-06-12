@@ -41,7 +41,7 @@ Push → Trivy Scan → CVE Found → AI Patches Dockerfile
          → Smoke Test → KinD Validates → Re-scan Confirms → PR Opened
 ```
 
-**Zero data egress** with local Ollama (default), or use Gemini / OpenAI for faster inference.
+**Zero data egress** with local Ollama (default), or use OpenAI-compatible API providers (like NVIDIA NIM or DeepSeek) for faster inference. Supports **mono-repos** out-of-the-box via dynamic build context resolution.
 
 ---
 
@@ -122,7 +122,7 @@ Create this repository secret first in **GitHub Settings → Secrets and variabl
 | Layer | Tool | Role |
 |---|---|---|
 | **Scanning** | Trivy | CVE detection, SBOM generation |
-| **AI Reasoning** | Ollama / Gemini / OpenAI | Dockerfile patching |
+| **AI Reasoning** | Ollama / OpenAI / NVIDIA NIM | Dockerfile patching |
 | **Validation** | KinD | Ephemeral K8s integration test |
 | **Orchestration** | GitHub Actions | Full pipeline coordinator |
 | **PR Creation** | peter-evans/create-pull-request | Automated, human-reviewable PR |
@@ -136,10 +136,10 @@ Create this repository secret first in **GitHub Settings → Secrets and variabl
 | `dockerfile` | No | `Dockerfile` | Path to the Dockerfile to scan and patch |
 | `image-ref` | No | `''` | Pre-built image to scan (skips build step) |
 | `severity` | No | `CRITICAL,HIGH` | Trivy severity filter |
-| `provider` | No | `ollama` | LLM provider: `ollama`, `gemini`, `openai` |
+| `provider` | No | `ollama` | LLM provider: `ollama` or `openai` |
 | `model` | No | *(auto)* | Model name for the selected provider |
 | `api-key` | No | `''` | API key for cloud providers |
-| `openai-endpoint` | No | `https://api.openai.com/v1/chat/completions` | OpenAI-compatible endpoint (set NVIDIA NIM URL for DeepSeek) |
+| `openai-endpoint` | No | `https://integrate.api.nvidia.com/v1` | OpenAI-compatible base URL (e.g. NVIDIA NIM or DeepSeek API) |
 | `trivy-version` | No | `0.55.0` | Trivy version |
 | `kind-enabled` | No | `true` | Enable KinD cluster validation |
 | `kind-config` | No | `.kind/cluster-config.yaml` | KinD cluster config path |
@@ -148,7 +148,8 @@ Create this repository secret first in **GitHub Settings → Secrets and variabl
 | `pr-branch` | No | `auto-patcher/cve-remediation` | Branch name for the PR |
 | `pr-labels` | No | `security,automated-patch,...` | PR labels |
 | `fail-on-vulnerability` | No | `true` | Fail if CVEs can't be patched |
-| `ollama-timeout` | No | `120` | LLM inference timeout (seconds) |
+| `llm-timeout` | No | `300` | LLM inference timeout (seconds) |
+| `policy-preset` | No | `strict` | Enforcement mode: `strict` (fail on any issue) or `lax` (warn and continue) |
 
 ## 📤 Outputs
 
@@ -233,7 +234,7 @@ trivy image --format json --output trivy-results.json guardian-demo:latest
 PROVIDER=openai \
 API_KEY="<NVIDIA_NIM_API_KEY>" \
 OPENAI_MODEL="deepseek-ai/deepseek-v4-flash" \
-OPENAI_ENDPOINT="https://integrate.api.nvidia.com/v1/chat/completions" \
+OPENAI_ENDPOINT="https://integrate.api.nvidia.com/v1" \
 python scripts/remediate_cve.py
 
 # Validate in a local KinD cluster
