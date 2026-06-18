@@ -118,6 +118,16 @@ inputs:
     required: false
     default: 'true'
 
+  healthz-port:
+    description: 'Host port mapped to the container for the health check'
+    required: false
+    default: '18080'
+
+  healthz-path:
+    description: 'Endpoint route path for the health check probe'
+    required: false
+    default: '/healthz'
+
 # ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
@@ -435,8 +445,9 @@ runs:
         CONTAINER_PORT="${CONTAINER_PORT:-8080}"
 
         # 2. Determine host mapped port and check path
-        HOST_PORT="${HEALTHZ_PORT:-18080}"
-        PATH_CHECK="${HEALTHZ_PATH:-/healthz}"
+        # Prioritize ENV variable first, then fallback to Action Input, then to default values
+        HOST_PORT="${HEALTHZ_PORT:-${{ inputs.healthz-port }}}"
+        PATH_CHECK="${HEALTHZ_PATH:-${{ inputs.healthz-path }}}"
 
         echo "Smoke test environment resolved:"
         echo "  Exposed Container Port:  $CONTAINER_PORT"
