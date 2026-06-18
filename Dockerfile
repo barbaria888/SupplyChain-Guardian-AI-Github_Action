@@ -12,6 +12,7 @@ RUN apk update && apk upgrade --no-cache
 COPY src/requirements.txt .
 
 RUN pip install --no-cache-dir --upgrade pip wheel setuptools \
+    && pip install --no-cache-dir --upgrade starlette==1.3.1 \
     && pip install --no-cache-dir --upgrade -r requirements.txt
 
 COPY src/ .
