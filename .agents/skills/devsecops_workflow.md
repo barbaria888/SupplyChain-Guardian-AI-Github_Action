@@ -1,7 +1,7 @@
 # Skill: Proactive DevSecOps Supply Chain Guardian Workflow
 
-**Version:** 1.0.0  
-**Last Updated:** 2026-06-01  
+**Version:** 2.0.0  
+**Last Updated:** 2026-06-18  
 **Maintained By:** @SecOps, @AIPatcher, @SRE
 
 ---
@@ -19,21 +19,26 @@ decision traces back to the principles defined here.
 
 Traditional DevSecOps is **detection-first**: scanners find problems
 and file tickets. This pipeline is **remediation-first**: scanners find
-problems, the AI fixes them, the cluster validates the fix, and a
-human-reviewable PR is the final artifact.
+problems, the AI fixes them, multi-gate validation proves the fix, and
+a human-reviewable PR is the final artifact.
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│                    SUPPLY CHAIN GUARDIAN LOOP                      │
-│                                                                    │
-│  ┌─────────┐    ┌──────────┐    ┌──────────┐    ┌─────────────┐  │
-│  │ @SecOps │───▶│@AIPatcher│───▶│   @SRE   │───▶│  PR + Audit │  │
-│  │  Scan   │    │  Patch   │    │ Validate │    │    Trail    │  │
-│  └─────────┘    └──────────┘    └──────────┘    └─────────────┘  │
-│       │                │               │                           │
-│   trivy-results     LLM call       KinD deploy               GitHub PR  │
-│   .json output    + Dockerfile   + health check           + SBOM diff  │
-└────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                       SUPPLY CHAIN GUARDIAN LOOP (v2)                        │
+│                                                                              │
+│  ┌─────────┐  ┌──────────┐  ┌───────────┐  ┌───────────┐  ┌─────────────┐  │
+│  │ @SecOps │─▶│@AIPatcher│─▶│ Integrity │─▶│ Smoke Test│─▶│    @SRE     │  │
+│  │  Scan   │  │  Patch   │  │   Gate    │  │  + Health │  │  KinD Test  │  │
+│  └─────────┘  └──────────┘  └───────────┘  └───────────┘  └──────┬──────┘  │
+│       │              │             │              │               │          │
+│  trivy-results   LLM call    Blueprint     Build+Run+DB     kubectl wait    │
+│  .json output  + Dockerfile   check        injection       + health probe   │
+│                  .patched                                                    │
+│                                                              ┌──────────┐   │
+│                                                              │ PR+Audit │   │
+│                                                              │  Trail   │   │
+│                                                              └──────────┘   │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -53,21 +58,36 @@ fixed version, and description.
 output schema, `@SecOps` is responsible for updating the schema adapter
 in `scripts/schema_adapter.py`.
 
+**Dynamic Build Context:** When the `dockerfile` input contains a path
+separator (e.g., `./backend/Dockerfile`), the scan stage automatically
+derives the Docker build context from `dirname` to support mono-repo
+layouts without sending the entire repository root to the Docker daemon.
+
 **Gate:** If zero CRITICAL/HIGH CVEs are found, the pipeline exits
 cleanly with a success status. No AI call is made. This is a cost and
 latency optimization.
 
 ---
 
-### 2. @AIPatcher → @SRE (The Patch Delivery)
+### 2. @AIPatcher → Integrity Gate (The Patch Delivery)
 
 **Trigger:** `scripts/remediate_cve.py` successfully extracts a valid
-Dockerfile patch from the Ollama LLM response.
+Dockerfile patch from the LLM response (Ollama, OpenAI, or NVIDIA NIM).
 
-**Artifact Produced:** An overwritten `Dockerfile` with updated base
-image and/or dependency pins. A companion `patch_audit.log` is written
-alongside it, recording the exact prompt sent, the raw LLM response,
-and the parsed patch applied.
+**Artifact Produced:** A `Dockerfile.patched` file written side-by-side
+with the original (the original is **never touched** until all gates pass).
+A companion `patch_audit.log` is written alongside it, recording the exact
+prompt sent, the raw LLM response, and the parsed patch applied.
+
+**Manifest-First Remediation Strategy:** The LLM system prompt instructs
+the AI to fix vulnerabilities by pinning OS-level packages (`apk add` /
+`apt-get install` version pins) rather than injecting inline `npm install`
+or `pip install` commands. This prevents dependency collision loops and
+corrupt `node_modules` / `site-packages` footprints.
+
+**API Key Resolution:** The remediation engine resolves credentials via
+`inputs.api-key` first, falling back to `env.API_KEY` from the step or
+job environment. Secrets are never hardcoded.
 
 **Contract:** The `@AIPatcher` must NEVER modify files in the `k8s/`
 directory. Kubernetes manifest patching is exclusively `@SRE`'s domain.
@@ -75,22 +95,53 @@ If a CVE requires a manifest change (e.g., a network policy), the
 `@AIPatcher` must flag it in `patch_audit.log` as `REQUIRES_SRE_REVIEW`
 and halt its own job with a non-zero exit code.
 
-**Validation Hook:** Before writing the patched Dockerfile, the script
-runs a syntax check using `docker build --no-cache --dry-run` (if
-available) or a regex guard to confirm the output contains `FROM`,
-`WORKDIR`, and `CMD`/`ENTRYPOINT` lines.
+---
+
+### 3. Integrity Gate → Smoke Test (Adaptive Blueprint Validation)
+
+**Trigger:** `Dockerfile.patched` is produced by the remediation engine.
+
+**Validation Logic:**
+- **Core Mandatory Instructions** (always enforced): `FROM`, `WORKDIR`,
+  `COPY`, `EXPOSE`, `CMD`.
+- **HEALTHCHECK**: Enforced only if the original Dockerfile contained one.
+- **USER**: Enforced only when `enforce-non-root` is `true` (default) AND
+  the original Dockerfile had a `USER` directive.
+
+**Configurable Non-Root Policy:** The `enforce-non-root` input (default:
+`true`) controls whether the integrity gate requires a `USER` instruction.
+Setting it to `false` permits root-based container configurations for
+base images or build-stage containers.
+
+**Gate:** Missing any mandatory instruction causes the pipeline to fail
+with a detailed error message listing the missing properties.
 
 ---
 
-### 3. @SRE → PR Gate (The Proof)
+### 4. Smoke Test → @SRE (Build + Runtime + Health Probe)
 
-**Trigger:** The patched Docker image builds successfully and is loaded
-into the ephemeral KinD cluster.
+**Trigger:** The integrity gate passes.
 
-**Artifact Produced:** A `kind-test-report.txt` capturing the output of:
-- `kubectl get pods -A`
-- `kubectl describe deployment/<app-name>`
-- The re-run Trivy scan result showing 0 CRITICAL CVEs on the new image.
+**Validation Stages:**
+1. **Docker Build Gate**: `docker build -f Dockerfile.patched` must succeed.
+2. **Runtime Stability**: Container must remain running for 15 seconds.
+3. **Database Injection**: Dummy `MONGO_URI`, `DATABASE_URL`, and `SKIP_DB`
+   environment variables are injected into the container to prevent apps
+   with mandatory DB connections (Mongoose, PostgreSQL) from crashing.
+4. **Health Probe**: 5 retries of `curl http://localhost:18080/healthz`.
+
+---
+
+### 5. @SRE → PR Gate (The Proof)
+
+**Trigger:** The patched Docker image builds, boots, and passes the
+health probe in the smoke test. KinD validation follows.
+
+**Artifact Produced:** A `kind-diagnostics/` directory capturing:
+- `all-pods.txt` — `kubectl get pods -A`
+- `pod-describe.txt` — `kubectl describe pods`
+- `events.txt` — cluster events sorted by timestamp
+- Per-pod log files
 
 **Contract:** The `@SRE`'s KinD validation job must run the patched
 image through the *same* Kubernetes manifests in `k8s/` that exist in
@@ -114,7 +165,8 @@ GitHub Actions run summary:
 |---|---|---|
 | `trivy-results.json` | @SecOps | Original vulnerability report |
 | `patch_audit.log` | @AIPatcher | Full prompt + LLM response log |
-| `kind-test-report.txt` | @SRE | Cluster validation evidence |
+| `Dockerfile.patched` | @AIPatcher | The generated patch (for forensic review) |
+| `kind-diagnostics/` | @SRE | Cluster validation evidence |
 | `trivy-results-post-patch.json` | @SecOps | Proof of CVE remediation |
 
 These artifacts are retained for **90 days** and can be used for SOC 2
@@ -131,13 +183,16 @@ was validated before being proposed for merge.
 | LLM fails 3 retries | Pipeline fails loudly; no silent skip | Repo Owner via GitHub Issue |
 | KinD deploy fails (>120s) | Pipeline fails; detailed report filed | Repo Owner via GitHub Issue |
 | Re-scan still shows CRITICAL | PR blocked; escalation issue filed | @SecOps + Repo Owner |
+| Integrity gate FAILED | Pipeline blocks; missing instructions logged | @AIPatcher + Repo Owner |
+| Smoke test container crash | Logs captured; DB injection verified | @SRE + Repo Owner |
 
 ---
 
 ## Skill Dependencies
 
 - **Trivy:** v0.55.0+ (for SBOM and supply chain scanning support)
-- **Ollama:** v0.3.0+ (for Llama 3.2 1B tool-calling support)
+- **Ollama:** v0.3.0+ (for local inference; optional when using cloud providers)
 - **KinD:** v0.23.0+
 - **Python:** 3.12+ (for `scripts/`)
 - **kubectl:** v1.30+
+- **Docker:** v24.0+ (for `docker build` and `docker run` smoke tests)
