@@ -563,53 +563,56 @@ runs:
           RESOLVED_PORT="${DETECTED_PORT:-8080}"
           echo "Using port $RESOLVED_PORT for ephemeral deployment."
 
-          cat <<EOF > "$EPHEMERAL_DIR/deployment.yaml"
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: guardian-ephemeral-deployment
-  namespace: default
-  labels:
-    managed-by: supply-chain-guardian
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: guardian-ephemeral-pod
-  template:
-    metadata:
-      labels:
-        app: guardian-ephemeral-pod
-    spec:
-      containers:
-      - name: application
-        image: $PATCHED_TAG
-        imagePullPolicy: Never
-        ports:
-        - containerPort: $RESOLVED_PORT
-        securityContext:
-          runAsNonRoot: true
-          runAsUser: 1000
-          runAsGroup: 1000
-          readOnlyRootFilesystem: true
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - ALL
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: guardian-ephemeral-service
-  namespace: default
-spec:
-  selector:
-    app: guardian-ephemeral-pod
-  ports:
-  - protocol: TCP
-    port: $RESOLVED_PORT
-    targetPort: $RESOLVED_PORT
-EOF
+          cat <<'EOF' > "$EPHEMERAL_DIR/deployment.yaml"
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: guardian-ephemeral-deployment
+            namespace: default
+            labels:
+              managed-by: supply-chain-guardian
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: guardian-ephemeral-pod
+            template:
+              metadata:
+                labels:
+                  app: guardian-ephemeral-pod
+              spec:
+                containers:
+                - name: application
+                  image: PATCHED_TAG_PLACEHOLDER
+                  imagePullPolicy: Never
+                  ports:
+                  - containerPort: RESOLVED_PORT_PLACEHOLDER
+                  securityContext:
+                    runAsNonRoot: true
+                    runAsUser: 1000
+                    runAsGroup: 1000
+                    readOnlyRootFilesystem: true
+                    allowPrivilegeEscalation: false
+                    capabilities:
+                      drop:
+                      - ALL
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: guardian-ephemeral-service
+            namespace: default
+          spec:
+            selector:
+              app: guardian-ephemeral-pod
+            ports:
+            - protocol: TCP
+              port: RESOLVED_PORT_PLACEHOLDER
+              targetPort: RESOLVED_PORT_PLACEHOLDER
+        EOF
+          sed -i 's/^[[:space:]]\{2\}//' "$EPHEMERAL_DIR/deployment.yaml"
+          sed -i "s|PATCHED_TAG_PLACEHOLDER|$PATCHED_TAG|g" "$EPHEMERAL_DIR/deployment.yaml"
+          sed -i "s|RESOLVED_PORT_PLACEHOLDER|$RESOLVED_PORT|g" "$EPHEMERAL_DIR/deployment.yaml"
           MANIFESTS_FOUND+=("$EPHEMERAL_DIR/deployment.yaml")
           TARGET_APPLY_PATH="$EPHEMERAL_DIR/"
         else
