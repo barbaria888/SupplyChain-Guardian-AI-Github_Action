@@ -428,6 +428,21 @@ runs:
           echo "smoke_passed=false" >> "$GITHUB_OUTPUT"; exit 1
         fi
 
+        # Dynamic Port & Path Detection
+        # 1. Check if CONTAINER_PORT is set, otherwise auto-detect ExposedPorts from the image
+        DETECTED_PORT=$(docker inspect "$SMOKE_IMAGE" --format='{{range $p, $conf := .Config.ExposedPorts}}{{$p}}{{end}}' 2>/dev/null | sed 's|/tcp||' | head -n 1)
+        CONTAINER_PORT="${CONTAINER_PORT:-$DETECTED_PORT}"
+        CONTAINER_PORT="${CONTAINER_PORT:-8080}"
+
+        # 2. Determine host mapped port and check path
+        HOST_PORT="${HEALTHZ_PORT:-18080}"
+        PATH_CHECK="${HEALTHZ_PATH:-/healthz}"
+
+        echo "Smoke test environment resolved:"
+        echo "  Exposed Container Port:  $CONTAINER_PORT"
+        echo "  Mapped Host Port:        $HOST_PORT"
+        echo "  Validation HTTP Route:   $PATH_CHECK"
+
         # Runtime stability check (15s)
         # Inject dummy database URIs so apps with mandatory DB connections
         # (Mongoose, Postgres, etc.) don't crash during the smoke test.
@@ -436,7 +451,7 @@ runs:
           -e MONGO_URI="mongodb://localhost:27017/guardian-smoke-test" \
           -e DATABASE_URL="mongodb://localhost:27017/guardian-smoke-test" \
           -e SKIP_DB="true" \
-          -p 18080:8080 "$SMOKE_IMAGE"
+          -p "${HOST_PORT}:${CONTAINER_PORT}" "$SMOKE_IMAGE"
         sleep 15
 
         RUNNING=$(docker inspect "$CONTAINER" --format='{{.State.Running}}' 2>/dev/null || echo "false")
@@ -451,13 +466,13 @@ runs:
         # Health probe
         HEALTH_OK=false
         for i in $(seq 1 5); do
-          curl -sf http://localhost:18080/healthz > /dev/null 2>&1 && { HEALTH_OK=true; break; }
+          curl -sf "http://localhost:${HOST_PORT}${PATH_CHECK}" > /dev/null 2>&1 && { HEALTH_OK=true; break; }
           sleep 2
         done
         docker rm -f "$CONTAINER" 2>/dev/null || true
 
         if [[ "$HEALTH_OK" != "true" ]]; then
-          echo "::error::/healthz probe failed"
+          echo "::error::Health check probe failed on http://localhost:${HOST_PORT}${PATH_CHECK}"
           echo "smoke_passed=false" >> "$GITHUB_OUTPUT"; exit 1
         fi
 

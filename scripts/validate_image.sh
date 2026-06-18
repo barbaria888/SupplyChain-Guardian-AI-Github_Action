@@ -173,7 +173,15 @@ fi
 # ---------------------------------------------------------------------------
 log "=== Gate 4: Runtime Stability (${STABILITY_SECONDS}s window) ==="
 
-docker run -d --name "$CTR" -p "${HEALTHZ_PORT}:8080" "$PATCHED_IMAGE"
+# Auto-detect container port
+DETECTED_PORT=$(docker inspect "$PATCHED_IMAGE" --format='{{range $p, $conf := .Config.ExposedPorts}}{{$p}}{{end}}' 2>/dev/null | sed 's|/tcp||' | head -n 1)
+CONTAINER_PORT="${CONTAINER_PORT:-$DETECTED_PORT}"
+CONTAINER_PORT="${CONTAINER_PORT:-8080}"
+
+log "Exposed Container Port:  ${CONTAINER_PORT}"
+log "Mapped Host Port:        ${HEALTHZ_PORT}"
+
+docker run -d --name "$CTR" -p "${HEALTHZ_PORT}:${CONTAINER_PORT}" "$PATCHED_IMAGE"
 log "Container started: $CTR"
 
 INITIAL_RESTARTS=$(docker inspect "$CTR" --format='{{.RestartCount}}' 2>/dev/null || echo "0")
