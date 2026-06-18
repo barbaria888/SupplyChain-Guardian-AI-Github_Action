@@ -113,6 +113,11 @@ inputs:
     required: false
     default: 'strict'
 
+  enforce-non-root:
+    description: 'If true, the integrity gate will reject Dockerfiles running as root. Set to false to allow root execution.'
+    required: false
+    default: 'true'
+
 # ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
@@ -316,7 +321,7 @@ runs:
           exit 1
         fi
 
-    # ── 4. INTEGRITY GATE ─────────────────────────────────────
+    # ── 4. INTEGRITY GATE — Configurable Compliance Policies ──
     - name: Dockerfile integrity gate
       if: steps.remediate.outputs.patch_applied == 'true'
       shell: bash
@@ -327,26 +332,34 @@ runs:
         fi
         PATCHED="${{ github.workspace }}/Dockerfile.patched"
 
-        # Core primitives that must always remain mandatory
+        # Core primitives that must always remain mandatory for baseline compilation
         MANDATORY=("FROM" "WORKDIR" "COPY" "EXPOSE" "CMD")
 
-        # Dynamically check if USER and HEALTHCHECK exist in the original Dockerfile
-        for OPT_INSTR in USER HEALTHCHECK; do
-          if grep -qiE "^[[:space:]]*${OPT_INSTR}[[:space:]]" "$ORIGINAL"; then
-            MANDATORY+=("$OPT_INSTR")
+        # Conditionally check for HEALTHCHECK if it was in the source layout
+        if grep -qiE "^[[:space:]]*HEALTHCHECK[[:space:]]" "$ORIGINAL"; then
+          MANDATORY+=("HEALTHCHECK")
+        fi
+
+        # ENFORCE NON-ROOT POLICY: Only add USER check if explicitly enabled
+        if [[ "${{ inputs.enforce-non-root }}" == "true" ]]; then
+          if grep -qiE "^[[:space:]]*USER[[:space:]]" "$ORIGINAL"; then
+            echo "Policy Compliance: Non-Root container execution is ENFORCED."
+            MANDATORY+=("USER")
           fi
-        done
+        else
+          echo "Policy Compliance: Non-Root container check is SKIPPED. Root configurations are permitted."
+        fi
 
         MISSING=""
         for INSTR in "${MANDATORY[@]}"; do
           if ! grep -qiE "^[[:space:]]*${INSTR}[[:space:]]" "$PATCHED"; then
-            echo "::error::Missing instruction: $INSTR"
+            echo "::error::Policy Failure — Missing required Dockerfile instruction: $INSTR"
             MISSING="$MISSING $INSTR"
           fi
         done
 
         if [[ -n "$MISSING" ]]; then
-          echo "::error::Integrity gate FAILED. Missing:$MISSING"
+          echo "::error::Dockerfile structural integrity FAILED. Missing properties:$MISSING"
           cat "$PATCHED"
           exit 1
         fi
@@ -416,8 +429,14 @@ runs:
         fi
 
         # Runtime stability check (15s)
+        # Inject dummy database URIs so apps with mandatory DB connections
+        # (Mongoose, Postgres, etc.) don't crash during the smoke test.
         CONTAINER="guardian-smoke-$$"
-        docker run -d --name "$CONTAINER" -p 18080:8080 "$SMOKE_IMAGE"
+        docker run -d --name "$CONTAINER" \
+          -e MONGO_URI="mongodb://localhost:27017/guardian-smoke-test" \
+          -e DATABASE_URL="mongodb://localhost:27017/guardian-smoke-test" \
+          -e SKIP_DB="true" \
+          -p 18080:8080 "$SMOKE_IMAGE"
         sleep 15
 
         RUNNING=$(docker inspect "$CONTAINER" --format='{{.State.Running}}' 2>/dev/null || echo "false")

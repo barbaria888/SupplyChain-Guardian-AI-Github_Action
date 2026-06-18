@@ -150,6 +150,7 @@ Create this repository secret first in **GitHub Settings → Secrets and variabl
 | `fail-on-vulnerability` | No | `true` | Fail if CVEs can't be patched |
 | `llm-timeout` | No | `300` | LLM inference timeout (seconds) |
 | `policy-preset` | No | `strict` | Enforcement mode: `strict` (fail on any issue) or `lax` (warn and continue) |
+| `enforce-non-root` | No | `true` | Reject patched Dockerfiles running as root. Set to `false` to allow root. |
 
 ## 📤 Outputs
 
@@ -172,6 +173,20 @@ Create this repository secret first in **GitHub Settings → Secrets and variabl
 1. **Instruction Whitelist** — Every Dockerfile line must start with a valid instruction (`FROM`, `RUN`, `COPY`, etc.). Invented keywords like `CREATEGROUP` or `ADDuser` are rejected instantly.
 2. **Docker Build Smoke Test** — The patched Dockerfile must compile with `docker build` before any artifact is uploaded.
 3. **KinD Cluster Validation** — The patched image must boot, pass health probes, and show zero `CrashLoopBackOff` pods.
+
+### Manifest-First Remediation Strategy
+
+The AI patching engine prioritizes fixing vulnerabilities at the **source manifest** level (`package.json` / `requirements.txt`) rather than injecting inline package installation commands into Docker `RUN` layers. This prevents dependency collision loops and corrupt `node_modules` footprints.
+
+### Configurable Non-Root Policy
+
+The `enforce-non-root` input controls whether the integrity gate requires a `USER` instruction in the patched Dockerfile:
+- `true` (default): The gate enforces that a `USER` instruction exists in the patched file (if the original had one), ensuring non-root container execution.
+- `false`: Root configurations are permitted — useful for base images or build-stage containers.
+
+### Smoke Test Database Injection
+
+The runtime stability check automatically injects dummy database URIs (`MONGO_URI`, `DATABASE_URL`, `SKIP_DB`) into the smoke test container. This prevents applications with mandatory database connections (Mongoose, PostgreSQL, etc.) from crashing during the 15-second stability window.
 
 ### Side-by-Side Patching
 

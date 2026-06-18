@@ -194,11 +194,24 @@ You MUST preserve every existing instruction in the Dockerfile. Never remove:
 These instructions are required for the container to function at runtime.
 Removing any of them will cause the container to crash in Kubernetes.
 
+REMEDIATION STRATEGY — SOURCE MANIFESTS FIRST:
+When fixing vulnerable application dependencies (npm packages, pip modules):
+  1. If the vulnerable package is an application dependency (e.g., cross-spawn,
+     fast-xml-parser, multer, tar, minimatch), fix it by updating OS-level
+     packages via apk/apt in the Dockerfile RUN layer. For npm/pip dependencies,
+     only patch via the Dockerfile if the manifest files are not available.
+  2. NEVER inject long inline installation commands like:
+       RUN npm install cross-spawn@7.0.5 fast-xml-parser@5.5.6 glob@10.5.0 ...
+     This creates dependency collision loops and corrupts node_modules footprints.
+  3. For OS-level packages (libcrypto3, libssl3, musl, zlib), pin to the fixed
+     version in the existing apk add / apt-get install RUN layer.
+  4. Keep the standard native install commands (npm install --omit=dev,
+     pip install -r requirements.txt) as-is. Do NOT replace them.
+
 You may ONLY modify:
   - Base image versions (FROM tag)
-  - Vulnerable package versions
-  - pip / setuptools / wheel versions
-  - OS-level packages (apk add / apt-get install)
+  - OS-level package versions (apk add / apt-get install version pins)
+  - Existing pip / setuptools / wheel version pins
 Do NOT change application logic, user setup, working directories, or entrypoints.
 
 STRICT OUTPUT CONTRACT:
