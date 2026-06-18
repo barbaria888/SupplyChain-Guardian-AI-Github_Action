@@ -522,17 +522,124 @@ runs:
       shell: bash
       working-directory: ${{ github.workspace }}
       run: |
+        set -euo pipefail
+
         PATCHED_TAG="guardian-scan:patched"
         docker tag "guardian-scan:smoke-test" "$PATCHED_TAG"
         kind load docker-image "$PATCHED_TAG" --name guardian-test
 
-        # Swap image refs in manifests
-        find ${{ inputs.k8s-manifests }} -name '*.yaml' -o -name '*.yml' | while read f; do
-          sed -i "s|image:.*guardian.*|image: $PATCHED_TAG|g" "$f" || true
-          sed -i 's|imagePullPolicy:.*|imagePullPolicy: Never|g' "$f" || true
-        done
+        # 1. Resolve target manifests directory or files
+        TARGET_DIR="${{ inputs.k8s-manifests }}"
+        MANIFESTS_FOUND=()
 
-        kubectl apply -f ${{ inputs.k8s-manifests }}
+        if [[ -d "$TARGET_DIR" ]]; then
+          echo "Found target manifest directory: $TARGET_DIR"
+          while IFS= read -r -d '' file; do
+            MANIFESTS_FOUND+=("$file")
+          done < <(find "$TARGET_DIR" -maxdepth 3 \( -name "*.yaml" -o -name "*.yml" \) -print0 2>/dev/null)
+        else
+          echo "⚠️ Target directory '$TARGET_DIR' not found. Switch to discovery routing..."
+        fi
+
+        # 2. Switch to discovery routing if target folder was empty or missing
+        if [[ ${#MANIFESTS_FOUND[@]} -eq 0 ]]; then
+          echo "Searching workspace footprint for alternative manifests (maxdepth 2)..."
+          while IFS= read -r -d '' file; do
+            # Filter out hidden folders/files (.github, .git, .agents, .guardian-runtime-manifests, etc.)
+            if [[ "$file" != *"/.github/"* && "$file" != *"/.git/"* && "$file" != *"/.agents/"* && "$file" != *"/.guardian-runtime-manifests/"* ]]; then
+              MANIFESTS_FOUND+=("$file")
+            fi
+          done < <(find . -maxdepth 3 \( -name "*.yaml" -o -name "*.yml" \) -print0 2>/dev/null)
+        fi
+
+        # 3. Dynamic Ephemeral Generation Moat
+        EPHEMERAL_DIR="${{ github.workspace }}/.guardian-runtime-manifests"
+        if [[ ${#MANIFESTS_FOUND[@]} -eq 0 ]]; then
+          echo "No configuration blueprints found on disk. Constructing ephemeral blueprint..."
+          mkdir -p "$EPHEMERAL_DIR"
+
+          # Detect exposed container port dynamically
+          DETECTED_PORT=$(docker inspect "$PATCHED_TAG" --format='{{range $p, $conf := .Config.ExposedPorts}}{{$p}}{{end}}' 2>/dev/null | sed 's|/tcp||' | head -n 1)
+          RESOLVED_PORT="${DETECTED_PORT:-8080}"
+          echo "Using port $RESOLVED_PORT for ephemeral deployment."
+
+          cat <<EOF > "$EPHEMERAL_DIR/deployment.yaml"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: guardian-ephemeral-deployment
+  namespace: default
+  labels:
+    managed-by: supply-chain-guardian
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: guardian-ephemeral-pod
+  template:
+    metadata:
+      labels:
+        app: guardian-ephemeral-pod
+    spec:
+      containers:
+      - name: application
+        image: $PATCHED_TAG
+        imagePullPolicy: Never
+        ports:
+        - containerPort: $RESOLVED_PORT
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: guardian-ephemeral-service
+  namespace: default
+spec:
+  selector:
+    app: guardian-ephemeral-pod
+  ports:
+  - protocol: TCP
+    port: $RESOLVED_PORT
+    targetPort: $RESOLVED_PORT
+EOF
+          MANIFESTS_FOUND+=("$EPHEMERAL_DIR/deployment.yaml")
+          TARGET_APPLY_PATH="$EPHEMERAL_DIR/"
+        else
+          # Swapping image refs in discovered manifests
+          echo "Applying auto-patch mutations to ${#MANIFESTS_FOUND[@]} discovered manifests..."
+          
+          # Match either 'guardian' or the image-ref name
+          REF_MATCH="guardian"
+          if [[ -n "${{ inputs.image-ref }}" ]]; then
+            REF_NAME=$(echo "${{ inputs.image-ref }}" | cut -d: -f1)
+            REF_MATCH="guardian|$REF_NAME"
+          fi
+
+          for f in "${MANIFESTS_FOUND[@]}"; do
+            echo "Mutating: $f"
+            sed -i -E "s|image:[[:space:]]*([^[:space:]]*)($REF_MATCH)([^[:space:]]*)|image: $PATCHED_TAG|g" "$f" || true
+            sed -i 's|imagePullPolicy:.*|imagePullPolicy: Never|g' "$f" || true
+          done
+          TARGET_APPLY_PATH=""
+        fi
+
+        # Apply the resolved manifest layout
+        if [[ -n "$TARGET_APPLY_PATH" ]]; then
+          kubectl apply -f "$TARGET_APPLY_PATH"
+        else
+          for f in "${MANIFESTS_FOUND[@]}"; do
+            kubectl apply -f "$f"
+          done
+        fi
+
         echo "Waiting for deployment readiness (120s)..."
         if kubectl wait --for=condition=available --timeout=120s deployment -l managed-by=supply-chain-guardian -n default 2>/dev/null || \
            kubectl wait --for=condition=available --timeout=120s deployment --all -n default; then
