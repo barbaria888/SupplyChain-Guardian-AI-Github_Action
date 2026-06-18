@@ -152,7 +152,7 @@ Create this repository secret first in **GitHub Settings → Secrets and variabl
 | `policy-preset` | No | `strict` | Enforcement mode: `strict` (fail on any issue) or `lax` (warn and continue) |
 | `enforce-non-root` | No | `true` | Reject patched Dockerfiles running as root. Set to `false` to allow root. |
 | `healthz-port` | No | `18080` | Host port mapped to the container for the health check |
-| `healthz-path` | No | `/healthz` | Endpoint route path for the health check probe |
+| `healthz-path` | No | `/` | Endpoint route path for the health check probe |
 
 ## 📤 Outputs
 

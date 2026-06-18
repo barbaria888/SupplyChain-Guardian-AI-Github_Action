@@ -126,7 +126,7 @@ inputs:
   healthz-path:
     description: 'Endpoint route path for the health check probe'
     required: false
-    default: '/healthz'
+    default: '/'
 
 # ---------------------------------------------------------------------------
 # Outputs
