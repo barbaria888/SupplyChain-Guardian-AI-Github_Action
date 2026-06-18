@@ -492,12 +492,28 @@ runs:
         cp "$PATCHED" "${{ inputs.dockerfile }}"
 
     # ── 6. KIND VALIDATION (@SRE) ─────────────────────────────
+    - name: Resolve KinD cluster config path
+      id: resolve-kind-config
+      if: steps.smoke-test.outputs.smoke_passed == 'true' && inputs.kind-enabled == 'true'
+      shell: bash
+      run: |
+        CFG_PATH="${{ inputs.kind-config }}"
+        if [[ -n "$CFG_PATH" && -f "$CFG_PATH" ]]; then
+          echo "Using custom KinD config file: $CFG_PATH"
+          echo "resolved_path=$CFG_PATH" >> "$GITHUB_OUTPUT"
+        else
+          if [[ -n "$CFG_PATH" ]]; then
+            echo "::warning::KinD config file '$CFG_PATH' not found. Falling back to default cluster configuration."
+          fi
+          echo "resolved_path=" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Set up KinD cluster
       if: steps.smoke-test.outputs.smoke_passed == 'true' && inputs.kind-enabled == 'true'
       uses: helm/kind-action@v1.10.0
       with:
         cluster_name: guardian-test
-        config: ${{ inputs.kind-config }}
+        config: ${{ steps.resolve-kind-config.outputs.resolved_path }}
         wait: 120s
 
     - name: Deploy patched image to KinD
