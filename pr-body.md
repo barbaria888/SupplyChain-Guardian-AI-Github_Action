@@ -4,8 +4,8 @@ This pull request was generated autonomously by the **Supply Chain Guardian** pi
 
 | Field | Value |
 |---|---|
-| **Workflow Run** | [View Run](https://github.com/barbaria888/SupplyChain-Guardian-AI-Github_Action/actions/runs/27741749780) |
-| **Scan Date** | 2026-06-18T06:47:39Z |
+| **Workflow Run** | [View Run](https://github.com/barbaria888/SupplyChain-Guardian-AI-Github_Action/actions/runs/28568439982) |
+| **Scan Date** | 2026-07-02T05:54:18Z |
 | **Model Used** | `deepseek-ai/deepseek-v4-flash` via NVIDIA NIM |
 | **Validation** | Ephemeral KinD cluster — all health gates passed |
 
