@@ -11,6 +11,82 @@
 ---
 
 ## 💡 What is Supply Chain Guardian AI?
+<img src="https://hardik0811arora.hashnode.dev/_next/image?url=https%3A%2F%2Fcdn.hashnode.com%2Fuploads%2Fcovers%2F63cfb22ea39405dcc990b569%2Fdabe9265-ded4-4b24-b783-619f4d817243.png&w=3840&q=75">
+<table>
+
+<tr>
+
+
+
+<td width="50%">
+
+
+
+###  SupplyChain Guardian AI Explainer
+
+
+
+<p align="center">
+
+<a href="https://www.youtube.com/watch?v=9zQBe_HQFak">
+
+<img width="200" alt="SupplyChain Guardian AI Demo" src="https://github.com/user-attachments/assets/0b34021a-cec5-46bb-9b42-d1737dc36315"/>
+
+</a>
+
+</p>
+
+
+
+Watch the complete Explainer covering: 
+
+
+
+* Kubernetes DevSecOps Workflow
+
+* End-to-End Platform Walkthrough
+
+
+
+</td>
+
+
+
+<td width="50%">
+
+
+
+### ✍️ Building a Zero-Egress AI DevSecOps Pipeline
+
+
+
+<a href="https://hardik0811arora.hashnode.dev/building-a-zero-egress-ai-driven-devsecops-pipeline-my-journey-with-supplychain-guardian-ai?utm_source=hashnode&utm_medium=feed">
+
+
+
+<img src="https://img.shields.io/badge/Read_on-Hashnode-2962FF?style=for-the-badge&logo=hashnode&logoColor=white"/>
+
+
+
+</a>
+
+
+
+
+* Lessons from Building SupplyChain Guardian AI
+
+
+
+</td>
+
+
+
+</tr>
+
+</table>
+
+
+
 
 **Supply Chain Guardian AI** is an all-in-one GitHub Action that automatically secures your containerized applications:
 1. 🔍 **Scans** your container images using [Trivy](https://github.com/aquasecurity/trivy) for `CRITICAL` and `HIGH` vulnerabilities.
