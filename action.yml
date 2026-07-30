@@ -650,26 +650,9 @@ runs:
           # Swapping image refs in discovered manifests
           echo "Applying auto-patch mutations to ${#MANIFESTS_FOUND[@]} discovered manifests..."
           
-          # Match either 'guardian', the image-ref name, or repository/Dockerfile name heuristics
-          REF_MATCH="guardian"
-          if [[ -n "${{ inputs.image-ref }}" ]]; then
-            REF_NAME=$(echo "${{ inputs.image-ref }}" | cut -d: -f1 | tr '[:upper:]' '[:lower:]')
-            REF_MATCH="guardian|$REF_NAME"
-          else
-            DF_DIR=$(dirname "${{ inputs.dockerfile }}")
-            DF_DIR_BASE=$(basename "$DF_DIR" | tr '[:upper:]' '[:lower:]')
-            if [[ "$DF_DIR_BASE" != "." && "$DF_DIR_BASE" != "/" ]]; then
-              REF_MATCH="$REF_MATCH|$DF_DIR_BASE"
-            fi
-            REPO_NAME=$(basename "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-            if [[ -n "$REPO_NAME" ]]; then
-              REF_MATCH="$REF_MATCH|$REPO_NAME"
-            fi
-          fi
-
           for f in "${MANIFESTS_FOUND[@]}"; do
             echo "Mutating: $f"
-            sed -i -E "s|image:[[:space:]]*([^[:space:]]*)($REF_MATCH)([^[:space:]]*)|image: $PATCHED_TAG|g" "$f" || true
+            sed -i -E "s|image:[[:space:]]*.*|image: $PATCHED_TAG|g" "$f" || true
             sed -i 's|imagePullPolicy:.*|imagePullPolicy: Never|g' "$f" || true
           done
           TARGET_APPLY_PATH=""
