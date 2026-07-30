@@ -1,71 +1,69 @@
 # Supply Chain Guardian AI
 
-[![Autonomous Supply Chain Patcher](https://github.com/barbaria888/SupplyChain-Guardian-AI-Github_Action/actions/workflows/autonomous-patcher.yaml/badge.svg)](https://github.com/barbaria888/SupplyChain-Guardian-AI-Github_Action/actions/workflows/autonomous-patcher.yaml)
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Supply%20Chain%20Guardian%20AI-blueviolet?logo=github)](https://github.com/marketplace/actions/supply-chain-guardian-ai)
-[![Supply Chain Guardian](https://img.shields.io/badge/pipeline-supply--chain--guardian-blueviolet)](https://github.com)
-[![Security](https://img.shields.io/badge/security-trivy--scanned-brightgreen)](https://github.com/aquasecurity/trivy)
+[![Autonomous Supply Chain Patcher](https://github.com/barbaria888/SupplyChain-Guardian-AI-Github_Action/actions/workflows/autonomous-patcher.yaml/badge.svg)](https://github.com/barbaria888/SupplyChain-Guardian-AI-Github_Action/actions/workflows/autonomous-patcher.yaml)
+[![Security](https://img.shields.io/badge/security-trivy--scanned-brightgreen?logo=aquasecurity)](https://github.com/aquasecurity/trivy)
 [![AI Patching](https://img.shields.io/badge/AI-Multi--Provider-orange)](https://ollama.com)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **Autonomous, closed-loop CVE detection and remediation for containerized workloads — local CPU inference, cloud LLMs, or bring your own.**
-
-<img width="1024" height="1024" alt="overview" src="https://github.com/user-attachments/assets/4a78c1c1-203d-48c9-b176-ccbf505009d8" />
+> **Autonomous, closed-loop CVE detection and remediation for containerized workloads — local CPU inference, cloud LLMs, or bring your own API key.**
 
 ---
 
-## What This Does
+## 💡 What is Supply Chain Guardian AI?
 
-This GitHub Action detects vulnerabilities in your container images, uses an **AI model** to generate a Dockerfile patch, validates the fix inside an ephemeral **KinD cluster**, and opens a **pull request with proof** — all automatically.
-
-<!-- Premium Liquid Glass Gradient -->
-
-<p align="center">
-  <a href="https://www.youtube.com/watch?v=9zQBe_HQFak">
-    <img
-      src="https://capsule-render.vercel.app/api?type=rounded&height=150&text=Watch%20Pipeline%20Walkthrough%20on%20Youtube▶︎&fontSize=44&fontAlignY=43&fontColor=FFFFFF&animation=fadeIn&desc=AI-Powered%20Container%20Security%20Architecture&descAlignY=69&descSize=17&color=0:F8FAFC,10:E0F2FE,24:BAE6FD,40:93C5FD,58:A5B4FC,74:C4B5FD,88:FDE68A,100:FBCFE8"
-      style="
-        border-radius:32px;
-        box-shadow:
-          0 10px 40px rgba(148,163,184,0.18),
-          inset 0 1px 1px rgba(255,255,255,0.55),
-          inset 0 -1px 1px rgba(255,255,255,0.20);
-        border:1px solid rgba(255,255,255,0.32);
-      "
-    />
-  </a>
-</p>
-
-
+**Supply Chain Guardian AI** is an all-in-one GitHub Action that automatically secures your containerized applications:
+1. 🔍 **Scans** your container images using [Trivy](https://github.com/aquasecurity/trivy) for `CRITICAL` and `HIGH` vulnerabilities.
+2. 🤖 **Patches** vulnerable Dockerfiles using AI (Local Ollama, NVIDIA NIM, OpenAI, or DeepSeek).
+3. 🧪 **Smoke Tests** the patched Dockerfile (`docker build` + runtime health check).
+4. ☸️ **Validates** deployment stability inside a temporary [KinD (Kubernetes in Docker)](https://kind.sigs.k8s.io/) cluster *(optional)*.
+5. 🔀 **Opens a Pull Request** with complete proof and security audit logs.
 
 ```
-Push → Trivy Scan → CVE Found → AI Patches Dockerfile
-         → Smoke Test → KinD Validates → Re-scan Confirms → PR Opened
+Push / Cron → Trivy Scan → CVE Found → AI Patches Dockerfile
+       → Smoke Test → KinD Validates → Re-scan Confirms → PR Opened
 ```
 
-**Zero data egress** with local Ollama (default), or use OpenAI-compatible API providers (like NVIDIA NIM or DeepSeek) for faster inference. Supports **mono-repos** out-of-the-box via dynamic build context resolution.
+---
+
+## 📌 Table of Contents
+- [⚡ Quickstart](#-quickstart)
+- [📖 Common Workflow Examples](#-common-workflow-examples)
+  - [1. Minimal Setup (Default Local Ollama)](#1-minimal-setup-default-local-ollama)
+  - [2. Recommended Cloud Setup (NVIDIA NIM / DeepSeek / Kimi)](#2-recommended-cloud-setup-nvidia-nim--deepseek--kimi)
+  - [3. Scanning a Specific Dockerfile in a Monorepo](#3-scanning-a-specific-dockerfile-in-a-monorepo)
+  - [4. Simple App without Kubernetes (KinD Disabled)](#4-simple-app-without-kubernetes-kind-disabled)
+  - [5. Full Production Setup (KinD Testing + Auto PR)](#5-full-production-setup-kind-testing--auto-pr)
+- [🤖 Supported AI Providers](#-supported-ai-providers)
+- [📋 Complete Inputs & Outputs](#-complete-inputs--outputs)
+- [🛡️ Security & Reliability Features](#️-security--reliability-features)
+- [❓ FAQ & Troubleshooting](#-faq--troubleshooting)
+- [📄 License](#license)
 
 ---
 
 ## ⚡ Quickstart
 
-
+Add this step to your GitHub Actions workflow file (e.g. `.github/workflows/security.yml`):
 
 ```yaml
-name: Supply Chain Guardian
+name: Security Audit
 on:
   push:
     branches: [main]
-  schedule:
-    - cron: '0 2 * * *'  # Nightly CVE check
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
-  guardian:
+  scan-and-remediate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
       - name: Run Supply Chain Guardian
         uses: barbaria888/SupplyChain-Guardian-AI-Github_Action@v2
@@ -73,199 +71,199 @@ jobs:
           dockerfile: './Dockerfile'
 ```
 
-That's it. The action handles everything — scanning, patching, validation, and PR creation.
+---
+
+## 📖 Common Workflow Examples
+
+### 1. Minimal Setup (Default Local Ollama)
+No API key required! Uses Ollama (`llama3.2:1b`) directly on the GitHub Actions runner CPU.
+
+```yaml
+- name: Run Supply Chain Guardian (Local AI)
+  uses: barbaria888/SupplyChain-Guardian-AI-Github_Action@v2
+  with:
+    dockerfile: './Dockerfile'
+```
 
 ---
 
-## 🤖 Multi-Provider LLM Support
+### 2. Recommended Cloud Setup (NVIDIA NIM / DeepSeek / Kimi)
+Fast, high-accuracy inference using cloud AI models.
 
-Choose the inference engine that fits your needs:
-
-### Option 1: NVIDIA API via API Key (Recommended Cloud Setup)
-
-Create this repository secret first in **GitHub Settings → Secrets and variables → Actions**: `NVIDIA_NIM_API_KEY` (get your key from NVIDIA API Catalog: https://build.nvidia.com/).
+> **Prerequisite:** Add `NVIDIA_NIM_API_KEY` (or your provider's API key) to your **Repository Settings → Secrets and variables → Actions**.
 
 ```yaml
-- uses: barbaria888/SupplyChain-Guardian-AI-Github_Action@v2
+- name: Run Supply Chain Guardian (NVIDIA NIM)
+  uses: barbaria888/SupplyChain-Guardian-AI-Github_Action@v2
   with:
+    dockerfile: './Dockerfile'
     provider: 'openai'
-    model: 'deepseek-ai/deepseek-v4-flash'
+    model: 'moonshotai/kimi-k2.6'  # or 'deepseek-ai/deepseek-v4-flash'
+    openai-endpoint: 'https://integrate.api.nvidia.com/v1'
+    api-key: ${{ secrets.NVIDIA_NIM_API_KEY }}
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+---
+
+### 3. Scanning a Specific Dockerfile in a Monorepo
+Specify sub-directory paths easily:
+
+```yaml
+- name: Run Supply Chain Guardian (Backend App)
+  uses: barbaria888/SupplyChain-Guardian-AI-Github_Action@v2
+  with:
+    dockerfile: './backend/Dockerfile'
+    provider: 'openai'
+    model: 'z-ai/glm-5.2'
     openai-endpoint: 'https://integrate.api.nvidia.com/v1'
     api-key: ${{ secrets.NVIDIA_NIM_API_KEY }}
 ```
 
-### Option 2: Local Ollama (Zero Cost, Full Privacy)
+---
+
+### 4. Simple App without Kubernetes (KinD Disabled)
+If your repository does not deploy to Kubernetes, turn off KinD cluster testing by setting `kind-enabled: "false"`.
 
 ```yaml
-- uses: barbaria888/SupplyChain-Guardian-AI-Github_Action@v2
+- name: Run Supply Chain Guardian (KinD Disabled)
+  uses: barbaria888/SupplyChain-Guardian-AI-Github_Action@v2
   with:
-    provider: 'ollama'
-    model: 'llama3.2:1b'    # ~700MB, runs on GitHub runner CPU
-```
-
-### Option 3: OpenAI / Azure OpenAI
-
-```yaml
-- uses: barbaria888/SupplyChain-Guardian-AI-Github_Action@v2
-  with:
-    provider: 'openai'
-    model: 'deepseek-ai/deepseek-v4-flash'
-    api-key: ${{ secrets.OPENAI_API_KEY }}
+    dockerfile: './Dockerfile'
+    kind-enabled: 'false'
+    healthz-port: '5000'
+    healthz-path: '/health'
+    create-pr: 'true'
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ---
 
-## Architecture
+### 5. Full Production Setup (KinD Testing + Auto PR)
+Runs complete scanning, AI remediation, KinD deployment test, and opens an automated security PR.
 
-<img width="1536" height="1024" alt="Architecture" src="https://github.com/user-attachments/assets/5298fd37-a5f7-47ae-b68b-e66837630612" />
+```yaml
+name: Supply Chain Security Pipeline
 
-| Layer | Tool | Role |
-|---|---|---|
-| **Scanning** | Trivy | CVE detection, SBOM generation |
-| **AI Reasoning** | Ollama / OpenAI / NVIDIA NIM | Dockerfile patching |
-| **Validation** | KinD | Ephemeral K8s integration test |
-| **Orchestration** | GitHub Actions | Full pipeline coordinator |
-| **PR Creation** | peter-evans/create-pull-request | Automated, human-reviewable PR |
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * *'  # Daily security check at 2:00 AM
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  guardian-security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run Supply Chain Guardian
+        uses: barbaria888/SupplyChain-Guardian-AI-Github_Action@v2
+        with:
+          dockerfile: './backend/Dockerfile'
+          provider: 'openai'
+          model: 'deepseek-ai/deepseek-v4-flash'
+          openai-endpoint: 'https://integrate.api.nvidia.com/v1'
+          api-key: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          kind-enabled: 'true'
+          k8s-manifests: './k8s/'
+          healthz-port: '8080'
+          healthz-path: '/healthz'
+          create-pr: 'true'
+          pr-branch: 'security/auto-cve-patch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
 
 ---
 
-## 📋 Inputs
+## 🤖 Supported AI Providers
+
+You can switch between local CPU inference and cloud API providers using the `provider` and `openai-endpoint` inputs:
+
+| Provider | `provider` | `openai-endpoint` | Recommended Models |
+|---|---|---|---|
+| **Local Ollama** (Free) | `ollama` | *N/A* | `llama3.2:1b` *(default)* |
+| **NVIDIA NIM** | `openai` | `https://integrate.api.nvidia.com/v1` | `moonshotai/kimi-k2.6`, `deepseek-ai/deepseek-v4-flash`, `z-ai/glm-5.2` |
+| **OpenAI Direct** | `openai` | `https://api.openai.com/v1` | `gpt-4o-mini`, `gpt-4o` |
+| **Groq / DeepSeek / Custom** | `openai` | *(Your base URL)* | Any OpenAI-compatible model |
+
+---
+
+## 📋 Complete Inputs & Outputs
+
+### Inputs
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `dockerfile` | No | `Dockerfile` | Path to the Dockerfile to scan and patch |
-| `image-ref` | No | `''` | Pre-built image to scan (skips build step) |
-| `severity` | No | `CRITICAL,HIGH` | Trivy severity filter |
-| `provider` | No | `ollama` | LLM provider: `ollama` or `openai` |
-| `model` | No | *(auto)* | Model name for the selected provider |
-| `api-key` | No | `''` | API key for cloud providers. Falls back to step/job env `API_KEY` if omitted |
-| `openai-endpoint` | No | `https://integrate.api.nvidia.com/v1` | OpenAI-compatible base URL (e.g. NVIDIA NIM or DeepSeek API) |
-| `trivy-version` | No | `0.55.0` | Trivy version |
-| `kind-enabled` | No | `true` | Enable KinD cluster validation |
-| `kind-config` | No | `.kind/cluster-config.yaml` | KinD cluster config path |
-| `k8s-manifests` | No | `k8s/` | K8s manifests directory |
-| `create-pr` | No | `true` | Auto-create Pull Request |
-| `pr-branch` | No | `auto-patcher/cve-remediation` | Branch name for the PR |
-| `pr-labels` | No | `security,automated-patch,...` | PR labels |
-| `fail-on-vulnerability` | No | `true` | Fail if CVEs can't be patched |
-| `llm-timeout` | No | `300` | LLM inference timeout (seconds) |
-| `policy-preset` | No | `strict` | Enforcement mode: `strict` (fail on any issue) or `lax` (warn and continue) |
-| `enforce-non-root` | No | `true` | Reject patched Dockerfiles running as root. Set to `false` to allow root. |
-| `healthz-port` | No | `18080` | Host port mapped to the container for the health check |
-| `healthz-path` | No | `/` | Endpoint route path for the health check probe |
+| `dockerfile` | No | `./Dockerfile` | Path to the Dockerfile to scan and remediate |
+| `image-ref` | No | `''` | Pre-built image reference (if scanning existing image) |
+| `severity` | No | `CRITICAL,HIGH` | Comma-separated Trivy vulnerability severities |
+| `provider` | No | `ollama` | AI engine: `ollama` or `openai` |
+| `model` | No | *(auto)* | Model tag or identifier for the provider |
+| `api-key` | No | `''` | API Key for cloud providers (NVIDIA / OpenAI / Custom) |
+| `openai-endpoint` | No | `https://integrate.api.nvidia.com/v1` | OpenAI-compatible endpoint URL |
+| `trivy-version` | No | `0.63.0` | Trivy CLI version |
+| `kind-enabled` | No | `true` | Set to `"false"` to skip KinD Kubernetes integration tests |
+| `kind-config` | No | `.kind/cluster-config.yaml` | Path to custom KinD cluster config |
+| `k8s-manifests` | No | `k8s/` | Directory containing Kubernetes manifests to test in KinD |
+| `healthz-port` | No | `18080` | Container host port mapped during health check |
+| `healthz-path` | No | `/` | Endpoint path probed during container smoke test |
+| `create-pr` | No | `true` | Set to `"true"` to open a PR on successful patch |
+| `pr-branch` | No | `auto-patcher/cve-remediation` | Branch name used for the automated PR |
+| `pr-labels` | No | `security,automated-patch` | Comma-separated labels applied to the PR |
+| `enforce-non-root` | No | `true` | Enforces non-root execution (`USER` instruction) in patched Dockerfiles |
+| `policy-preset` | No | `strict` | Enforcement mode: `strict` (fail on unresolved CVE) or `lax` (warn only) |
 
-## 📤 Outputs
+### Outputs
 
 | Output | Description |
 |---|---|
-| `vulnerabilities-found` | Whether CRITICAL/HIGH CVEs were detected |
-| `patch-applied` | Whether the AI generated a valid patch |
-| `smoke-test-passed` | Whether the patched Dockerfile compiled |
-| `kind-validation-passed` | Whether KinD deployment succeeded |
-| `pr-url` | URL of the created Pull Request |
-| `trivy-results-path` | Path to scan results JSON |
-| `audit-log-path` | Path to the LLM audit log |
+| `vulnerabilities-found` | `"true"` if Trivy detected matching vulnerabilities |
+| `patch-applied` | `"true"` if AI successfully generated a patch |
+| `smoke-test-passed` | `"true"` if the patched Dockerfile built and booted cleanly |
+| `kind-validation-passed` | `"true"` if KinD Kubernetes deployment test succeeded |
 
 ---
 
-## 🛡️ Security Design
+## 🛡️ Security & Reliability Features
 
-### Hallucination Defense (3-Layer)
-
-1. **Instruction Whitelist** — Every Dockerfile line must start with a valid instruction (`FROM`, `RUN`, `COPY`, etc.). Invented keywords like `CREATEGROUP` or `ADDuser` are rejected instantly.
-2. **Docker Build Smoke Test** — The patched Dockerfile must compile with `docker build` before any artifact is uploaded.
-3. **KinD Cluster Validation** — The patched image must boot, pass health probes, and show zero `CrashLoopBackOff` pods.
-
-### Manifest-First Remediation Strategy
-
-The AI patching engine prioritizes fixing vulnerabilities at the **source manifest** level (`package.json` / `requirements.txt`) rather than injecting inline package installation commands into Docker `RUN` layers. This prevents dependency collision loops and corrupt `node_modules` footprints.
-
-### Configurable Non-Root Policy
-
-The `enforce-non-root` input controls whether the integrity gate requires a `USER` instruction in the patched Dockerfile:
-- `true` (default): The gate enforces that a `USER` instruction exists in the patched file (if the original had one), ensuring non-root container execution.
-- `false`: Root configurations are permitted — useful for base images or build-stage containers.
-
-### Smoke Test Database Injection
-
-The runtime stability check automatically injects dummy database URIs (`MONGO_URI`, `DATABASE_URL`, `SKIP_DB`) into the smoke test container. This prevents applications with mandatory database connections (Mongoose, PostgreSQL, etc.) from crashing during the 15-second stability window.
-
-### Side-by-Side Patching
-
-The AI writes to `Dockerfile.patched` — the original file is **never touched** until the smoke test passes. If the patch is rejected, the broken file is uploaded to a `rejected-patch-forensic` artifact for audit.
-
-### Security Contexts
-
-All Kubernetes manifests enforce:
-- `runAsNonRoot: true`
-- `readOnlyRootFilesystem: true`
-- `allowPrivilegeEscalation: false`
-- `capabilities.drop: [ALL]`
-- `seccompProfile: RuntimeDefault`
+* 🔒 **Zero Egress Option**: Use `provider: 'ollama'` for 100% offline, privacy-first patching directly inside the GitHub Actions runner.
+* 🛡️ **3-Layer Hallucination Defense**:
+  1. **Syntax Whitelist**: Inspects generated Dockerfile instructions (`FROM`, `RUN`, `COPY`, etc.) to prevent LLM hallucinations.
+  2. **Smoke Test Gate**: Verifies `docker build` and runtime container stability (with dummy DB env injection for app boots).
+  3. **KinD Cluster Verification**: Ensures the container deploys into Kubernetes without `CrashLoopBackOff`.
+* 📜 **Full Auditability**: Every run generates a `patch_audit.log` artifact containing full LLM prompts, raw outputs, and scan reports.
 
 ---
 
-## 📊 Compliance Artifacts
+## ❓ FAQ & Troubleshooting
 
-Every pipeline run uploads (90-day retention):
-
-| Artifact | Purpose |
-|---|---|
-| `trivy-results.json` | Original vulnerability report |
-| `patch_audit.log` | Full LLM prompt + response for audit review |
-| `kind-test-report.txt` | KinD cluster validation evidence |
-| `trivy-results-post-patch.json` | Proof of CVE remediation |
-
----
-
-## 🏗️ Repository Structure
-
+### Why is the PR creation step failing?
+Ensure your workflow file includes the required permissions:
+```yaml
+permissions:
+  contents: write
+  pull-requests: write
 ```
-.
-├── action.yml                        # GitHub Marketplace Action definition
-├── agents.md                         # Agent persona definitions
-├── .agents/skills/                   # Domain interaction contracts
-├── .kind/cluster-config.yaml         # KinD 2-node cluster spec
-├── .trivy/                           # Trivy policy & ignore files
-├── .github/workflows/                # Internal pipeline (dogfooding)
-├── k8s/                              # Production-grade K8s manifests
-├── scripts/remediate_cve.py          # AI patching engine (multi-provider)
-├── src/                              # Demo FastAPI application
-├── tests/unit/                       # 43 unit tests
-├── tests/integration/                # KinD integration test script
-├── Dockerfile                        # Intentionally vulnerable baseline
-├── SECURITY.md                       # Responsible disclosure policy
-└── README.md
+Also ensure you pass the `GITHUB_TOKEN` environment variable:
+```yaml
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
----
-
-## 🧑‍💻 Local Development
-
-```bash
-# Build and scan locally
-docker build -t guardian-demo:latest .
-trivy image --format json --output trivy-results.json guardian-demo:latest
-
-# Run the AI patcher locally with NVIDIA API
-PROVIDER=openai \
-API_KEY="<NVIDIA_NIM_API_KEY>" \
-OPENAI_MODEL="deepseek-ai/deepseek-v4-flash" \
-OPENAI_ENDPOINT="https://integrate.api.nvidia.com/v1" \
-python scripts/remediate_cve.py
-
-# Validate in a local KinD cluster
-kind create cluster --config .kind/cluster-config.yaml
-kind load docker-image guardian-demo:latest --name guardian-test
-kubectl apply -f k8s/
-kubectl wait --for=condition=available --timeout=120s deployment/guardian-demo
-```
+### Why did the KinD validation step fail with `ErrImageNeverPull`?
+Starting in **v2.4.0**, all discovered Kubernetes manifests automatically have their container `image:` replaced with the locally built patched image (`guardian-scan:patched`) and `imagePullPolicy: Never`. Make sure you are using `@v2` (or `@v2.4.0`+). If your repository does not use Kubernetes, simply set `kind-enabled: "false"`.
 
 ---
 
 ## License
 
-MIT — See [LICENSE](./LICENSE)
-
-
-> **Autonomous, closed-loop CVE detection and remediation for containerized workloads — supports both local Ollama and cloud providers like NVIDIA API.**
+[MIT License](./LICENSE) — Created by [@barbaria888](https://github.com/barbaria888).
