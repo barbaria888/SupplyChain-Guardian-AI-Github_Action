@@ -67,36 +67,47 @@ if [[ -f "$DOCKERFILE" && -d "$BUILD_CONTEXT" ]]; then
   echo ""
   echo "  Checking COPY/ADD source paths..."
   # Join continuation lines, then grep for COPY/ADD
-  sed -e ':a' -e '/\\$/N; s/\\\n/ /; ta' "$DOCKERFILE" | \
-    grep -iE '^\s*(COPY|ADD)\s' 2>/dev/null | \
-    while IFS= read -r line; do
-      # Skip multi-stage COPY --from=
-      echo "$line" | grep -qiE '\-\-from=' && continue
+  while IFS= read -r line; do
+    # Skip multi-stage COPY --from=
+    echo "$line" | grep -qiE '\-\-from=' && continue
 
-      # Remove flags like --chown=, --chmod=, --link
-      cleaned=$(echo "$line" | sed -E 's/--[a-zA-Z]+=("[^"]*"|[^ ]*)\s*//g; s/--[a-zA-Z]+\s*//g')
+    # Remove flags like --chown=, --chmod=, --link
+    cleaned=$(echo "$line" | sed -E 's/--[a-zA-Z]+=("[^"]*"|[^ ]*)\s*//g; s/--[a-zA-Z]+\s*//g')
 
-      # Parse: INSTRUCTION src1 src2 ... dest
-      args=()
-      while IFS= read -r arg; do
-        [[ -n "$arg" ]] && args+=("$arg")
-      done < <(echo "$cleaned" | awk '{for(i=2;i<=NF;i++) print $i}')
+    # Parse: INSTRUCTION src1 src2 ... dest
+    args=()
+    while IFS= read -r arg; do
+      [[ -n "$arg" ]] && args+=("$arg")
+    done < <(echo "$cleaned" | awk '{for(i=2;i<=NF;i++) print $i}')
 
-      [[ ${#args[@]} -lt 2 ]] && continue
+    [[ ${#args[@]} -lt 2 ]] && continue
 
-      # Check each source (everything except the last arg which is dest)
-      for ((i=0; i<${#args[@]}-1; i++)); do
-        src="${args[$i]}"
-        # Skip URLs and absolute paths
-        [[ "$src" =~ ^https?:// || "$src" = /* ]] && continue
-        if ! ls -d "$BUILD_CONTEXT/$src" &>/dev/null 2>&1; then
-          echo "::error::PREFLIGHT FAIL — source not found: '$src'"
-          ERRORS=$((ERRORS + 1))
-        else
-          echo "    ✓ $src"
+    # Check each source (everything except the last arg which is dest)
+    for ((i=0; i<${#args[@]}-1; i++)); do
+      src="${args[$i]}"
+      # Skip URLs and absolute paths
+      [[ "$src" =~ ^https?:// || "$src" = /* ]] && continue
+
+      # Check if file/glob exists. We quote the BUILD_CONTEXT and use nullglob for glob matches.
+      exists=false
+      if [[ "$src" == *["*?"]* ]]; then
+        if ( shopt -s nullglob; files=("$BUILD_CONTEXT"/$src); [[ ${#files[@]} -gt 0 ]] ) 2>/dev/null; then
+          exists=true
         fi
-      done
+      else
+        if [[ -e "$BUILD_CONTEXT/$src" ]]; then
+          exists=true
+        fi
+      fi
+
+      if [[ "$exists" = false ]]; then
+        echo "::error::PREFLIGHT FAIL — source not found: '$src'"
+        ERRORS=$((ERRORS + 1))
+      else
+        echo "    ✓ $src"
+      fi
     done
+  done < <(sed -e ':a' -e '/\\$/N; s/\\\n/ /; ta' "$DOCKERFILE" | grep -iE '^\s*(COPY|ADD)\s' 2>/dev/null)
 fi
 
 # --- Summary ---

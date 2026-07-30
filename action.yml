@@ -66,7 +66,7 @@ inputs:
   trivy-version:
     description: 'Trivy version'
     required: false
-    default: '0.55.0'
+    default: '0.63.0'
 
   kind-enabled:
     description: 'Run KinD cluster validation after smoke test'
@@ -246,8 +246,19 @@ runs:
 
         # Install Trivy if not available
         if ! command -v trivy &> /dev/null; then
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin v${{ inputs.trivy-version }}
+          SUDO_CMD=""
+          if [ "$EUID" -ne 0 ] && command -v sudo &> /dev/null; then
+            SUDO_CMD="sudo"
+          fi
+          TRIVY_VERSION="v${{ inputs.trivy-version }}"
+          echo "Installing Trivy $TRIVY_VERSION..."
+          if ! curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+              | $SUDO_CMD sh -s -- -b /usr/local/bin "$TRIVY_VERSION" 2>&1; then
+            echo "::warning::Trivy $TRIVY_VERSION install failed. Falling back to latest stable..."
+            curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+              | $SUDO_CMD sh -s -- -b /usr/local/bin
+          fi
+          trivy --version || { echo "::error::Trivy install failed."; exit 1; }
         fi
 
         TRIVY_OUT="${{ github.workspace }}/trivy-results.json"
@@ -552,6 +563,26 @@ runs:
           done < <(find . -maxdepth 3 \( -name "*.yaml" -o -name "*.yml" \) -print0 2>/dev/null)
         fi
 
+        # Filter discovered/target manifests to keep only valid Kubernetes specifications
+        VALID_MANIFESTS=()
+        if [[ ${#MANIFESTS_FOUND[@]} -gt 0 ]]; then
+          for f in "${MANIFESTS_FOUND[@]}"; do
+            if [[ -f "$f" ]] && grep -q "apiVersion:" "$f" && grep -q "kind:" "$f"; then
+              VALID_MANIFESTS+=("$f")
+            else
+              if [[ -f "$f" ]]; then
+                echo "Skipping non-Kubernetes file: $f"
+              fi
+            fi
+          done
+        fi
+        MANIFESTS_FOUND=()
+        if [[ ${#VALID_MANIFESTS[@]} -gt 0 ]]; then
+          for f in "${VALID_MANIFESTS[@]}"; do
+            MANIFESTS_FOUND+=("$f")
+          done
+        fi
+
         # 3. Dynamic Ephemeral Generation Moat
         EPHEMERAL_DIR="${{ github.workspace }}/.guardian-runtime-manifests"
         if [[ ${#MANIFESTS_FOUND[@]} -eq 0 ]]; then
@@ -619,11 +650,21 @@ runs:
           # Swapping image refs in discovered manifests
           echo "Applying auto-patch mutations to ${#MANIFESTS_FOUND[@]} discovered manifests..."
           
-          # Match either 'guardian' or the image-ref name
+          # Match either 'guardian', the image-ref name, or repository/Dockerfile name heuristics
           REF_MATCH="guardian"
           if [[ -n "${{ inputs.image-ref }}" ]]; then
-            REF_NAME=$(echo "${{ inputs.image-ref }}" | cut -d: -f1)
+            REF_NAME=$(echo "${{ inputs.image-ref }}" | cut -d: -f1 | tr '[:upper:]' '[:lower:]')
             REF_MATCH="guardian|$REF_NAME"
+          else
+            DF_DIR=$(dirname "${{ inputs.dockerfile }}")
+            DF_DIR_BASE=$(basename "$DF_DIR" | tr '[:upper:]' '[:lower:]')
+            if [[ "$DF_DIR_BASE" != "." && "$DF_DIR_BASE" != "/" ]]; then
+              REF_MATCH="$REF_MATCH|$DF_DIR_BASE"
+            fi
+            REPO_NAME=$(basename "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+            if [[ -n "$REPO_NAME" ]]; then
+              REF_MATCH="$REF_MATCH|$REPO_NAME"
+            fi
           fi
 
           for f in "${MANIFESTS_FOUND[@]}"; do
