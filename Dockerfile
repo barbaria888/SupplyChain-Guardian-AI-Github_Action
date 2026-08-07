@@ -11,8 +11,9 @@ RUN apk update && apk upgrade --no-cache
 
 COPY src/requirements.txt .
 
-RUN pip install --no-cache-dir --upgrade pip wheel setuptools \
+RUN pip install --no-cache-dir --upgrade pip wheel setuptools==78.1.1 \
     && pip install --no-cache-dir --upgrade starlette==1.3.1 \
+    && pip install --no-cache-dir --upgrade msgpack==1.2.1 \
     && pip install --no-cache-dir --upgrade -r requirements.txt
 
 COPY src/ .
