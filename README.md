@@ -11,8 +11,8 @@
 ---
 
 ## 💡 What is Supply Chain Guardian AI?
-<img src="https://hardik0811arora.hashnode.dev/_next/image?url=https%3A%2F%2Fcdn.hashnode.com%2Fuploads%2Fcovers%2F63cfb22ea39405dcc990b569%2Fdabe9265-ded4-4b24-b783-619f4d817243.png&w=3840&q=75">
 
+<img src="https://github.com/barbaria888/SupplyChain-Guardian-AI-Github_Action/blob/main/images/overview.png">
 
 
 
